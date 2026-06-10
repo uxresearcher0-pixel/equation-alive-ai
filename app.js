@@ -440,6 +440,7 @@ function hasExplicitSummation(input) {
 function classifyEquation(input) {
   const lower = input.toLowerCase();
   if (/dy\s*\/\s*dx|differentiat|derivative|d\/dx/.test(lower)) return "differentiation request";
+  if (/∫|integrat|antiderivative/.test(lower)) return "integration request";
   if (hasExplicitSummation(input)) return "finite series equation";
   if (/cases\s*\{|if .*;|≠/.test(lower)) return "piecewise equation";
   if (/\[\[.*\]\]|\bmatrix\b/.test(lower)) return "matrix expression";
@@ -895,7 +896,7 @@ function buildFormulaModel(input) {
   const target = solveTarget.value && solveTargets.includes(solveTarget.value) ? solveTarget.value : solveTargets[0] || left || variables[0] || "result";
   const solution = solveForTarget({ type, left, right, target, normalized, codeNormalized });
   const codeExpression = solution.expression || right;
-  const inputs = solution.family === "power_rule_derivative" ? ["x"] : orderInputs({ type, normalized }, variables.filter((variable) => variable !== target));
+  const inputs = ["power_rule_derivative", "power_rule_integral"].includes(solution.family) ? ["x"] : orderInputs({ type, normalized }, variables.filter((variable) => variable !== target));
 
   return {
     original: input,
@@ -940,6 +941,7 @@ function extractVariables(expression) {
 function getSolveTargets(model) {
   const { type, left, variables, normalized } = model;
   if (type === "differentiation request" || /dy\s*\/\s*dx|derivative|differentiate|d\/dx/i.test(normalized)) return ["dy/dx"];
+  if (type === "integration request" || /∫|integrate|integral|antiderivative/i.test(normalized)) return ["∫dx"];
   const family = identifyFormulaFamily({ normalized });
   const template = getSolverTemplate(family);
   if (template?.targets?.length) return template.targets;
@@ -1550,11 +1552,102 @@ function buildApplications(item) {
 function parseDerivativeRequest(model) {
   const source = normalizeForCode(model.normalized || model.original || "");
   const sentenceMatch = source.match(/(?:if\s+)?y\s*=\s*([^,;]+?)\s*,?\s*then\s*(?:dy\s*\/\s*dx|d\s*\/\s*dx)/i);
-  if (sentenceMatch) return parsePowerRuleTerm(sentenceMatch[1]);
+  if (sentenceMatch) return parseDerivativeExpression(sentenceMatch[1]);
   const derivativeMatch = source.match(/(?:dy\s*\/\s*dx|d\s*\/\s*dx|derivative(?:\s+of)?|differentiate)\s*[:=]?\s*(.+)$/i);
   const expressionSource = derivativeMatch ? derivativeMatch[1] : source;
   const right = extractRightSide(expressionSource).trim();
-  return parsePowerRuleTerm(right || expressionSource);
+  return parseDerivativeExpression(right || expressionSource);
+}
+
+function parseIntegrationRequest(model) {
+  const source = normalizeForCode(model.normalized || model.original || "");
+  const integralMatch = source.match(/(?:∫|integral(?:\s+of)?|integrate|antiderivative(?:\s+of)?)\s*[:=]?\s*(.+)$/i);
+  const expressionSource = integralMatch ? integralMatch[1] : source;
+  const right = extractRightSide(expressionSource).replace(/\*?\s*d\s*\*?\s*x$/i, "").trim();
+  return parseIntegralExpression(right || expressionSource);
+}
+
+function splitSignedTerms(expression) {
+  const clean = normalizeForCode(expression)
+    .replace(/\s+/g, "")
+    .replace(/\*\*/g, "^")
+    .replace(/^\((.*)\)$/, "$1")
+    .replace(/-/g, "+-");
+  return clean.split("+").filter(Boolean);
+}
+
+function parseDerivativeExpression(expression) {
+  const terms = splitSignedTerms(expression).map(parseDerivativeTerm);
+  if (!terms.length || terms.some((term) => !term)) return null;
+  const nonzero = terms.filter((term) => term.derivativeExpression !== "0");
+  const derivativeExpression = combineSignedExpressions(nonzero.map((term) => term.derivativeExpression)) || "0";
+  return {
+    terms,
+    coefficient: terms.length === 1 ? terms[0].coefficient : null,
+    exponent: terms.length === 1 ? terms[0].exponent : null,
+    derivativeCoefficient: terms.length === 1 ? terms[0].derivativeCoefficient : null,
+    derivativeExponent: terms.length === 1 ? terms[0].derivativeExponent : null,
+    originalExpression: expression,
+    derivativeExpression,
+    ruleStep: terms.map((term) => term.ruleStep).join("; "),
+  };
+}
+
+function parseIntegralExpression(expression) {
+  const terms = splitSignedTerms(expression).map(parseIntegralTerm);
+  if (!terms.length || terms.some((term) => !term)) return null;
+  return {
+    terms,
+    originalExpression: expression,
+    integralExpression: `${combineSignedExpressions(terms.map((term) => term.integralExpression))} + C`,
+    ruleStep: terms.map((term) => term.ruleStep).join("; "),
+  };
+}
+
+function parseDerivativeTerm(term) {
+  if (/^[+-]?\d+(?:\.\d+)?$/.test(term)) {
+    return {
+      kind: "constant",
+      coefficient: Number(term),
+      exponent: 0,
+      derivativeCoefficient: 0,
+      derivativeExponent: 0,
+      derivativeExpression: "0",
+      ruleStep: `d/dx(${term}) = 0`,
+    };
+  }
+  if (/^sin\(x\)$/i.test(term)) return { kind: "trig", derivativeExpression: "cos(x)", ruleStep: "d/dx(sin(x)) = cos(x)" };
+  if (/^cos\(x\)$/i.test(term)) return { kind: "trig", derivativeExpression: "-sin(x)", ruleStep: "d/dx(cos(x)) = -sin(x)" };
+  return parsePowerRuleTerm(term);
+}
+
+function parseIntegralTerm(term) {
+  if (/^[+-]?\d+(?:\.\d+)?$/.test(term)) {
+    return {
+      kind: "constant",
+      integralExpression: `${term}*x`,
+      ruleStep: `∫ ${term} dx = ${term}*x`,
+    };
+  }
+  if (/^sin\(x\)$/i.test(term)) return { kind: "trig", integralExpression: "-cos(x)", ruleStep: "∫ sin(x) dx = -cos(x)" };
+  if (/^cos\(x\)$/i.test(term)) return { kind: "trig", integralExpression: "sin(x)", ruleStep: "∫ cos(x) dx = sin(x)" };
+  const power = parsePowerRuleTerm(term);
+  if (!power || Math.abs(power.exponent + 1) < EPSILON) return null;
+  const integralCoefficient = power.coefficient / (power.exponent + 1);
+  const integralExponent = power.exponent + 1;
+  return {
+    kind: "power",
+    integralExpression: formatPowerDerivative(integralCoefficient, integralExponent),
+    ruleStep: `∫ ${term} dx = (${formatNumber(power.coefficient)}/${formatNumber(integralExponent)})*x^${formatNumber(integralExponent)}`,
+  };
+}
+
+function combineSignedExpressions(expressions) {
+  return expressions
+    .filter(Boolean)
+    .join("+")
+    .replace(/\+-/g, "-")
+    .replace(/^\+/, "");
 }
 
 function parsePowerRuleTerm(expression) {
@@ -1608,6 +1701,17 @@ function solveForTarget(model) {
       supported: true,
       family: "power_rule_derivative",
       derivative,
+    };
+  }
+  const integral = parseIntegrationRequest(model);
+  if (integral) {
+    return {
+      target: "∫dx",
+      expression: integral.integralExpression,
+      note: `Antiderivative rules: ${integral.ruleStep}.`,
+      supported: true,
+      family: "power_rule_integral",
+      integral,
     };
   }
   if (type === "finite series equation") {
@@ -1793,12 +1897,19 @@ function buildAlgorithm(type, target, inputs, expression, solution = {}) {
   }
   if (solution.family === "power_rule_derivative") {
     const derivative = solution.derivative;
-    lines.push("1. Identify the monomial as y = a*x^n.");
-    lines.push(`2. Read coefficient a = ${formatNumber(derivative.coefficient)} and exponent n = ${formatNumber(derivative.exponent)}.`);
-    lines.push("3. Apply the power rule: d/dx(a*x^n) = n*a*x^(n-1).");
-    lines.push(`4. Multiply n*a = ${formatNumber(derivative.derivativeCoefficient)}.`);
-    lines.push(`5. Reduce the exponent n-1 = ${formatNumber(derivative.derivativeExponent)}.`);
-    lines.push(`6. Return dy/dx = ${derivative.derivativeExpression}.`);
+    lines.push("1. Split the expression into signed terms.");
+    lines.push("2. Apply the matching rule to each term: constant rule, power rule, or basic trig rule.");
+    lines.push("3. Apply the power rule where needed: d/dx(a*x^n) = n*a*x^(n-1).");
+    lines.push("4. For each power term a*x^n, compute n*a*x^(n-1).");
+    lines.push(`5. Rule steps: ${derivative.ruleStep}.`);
+    lines.push(`6. Combine terms and return dy/dx = ${derivative.derivativeExpression}.`);
+  } else if (solution.family === "power_rule_integral") {
+    const integral = solution.integral;
+    lines.push("1. Split the integrand into signed terms.");
+    lines.push("2. Apply the matching antiderivative rule to each term.");
+    lines.push("3. For each power term a*x^n, compute a/(n+1)*x^(n+1), where n != -1.");
+    lines.push(`4. Rule steps: ${integral.ruleStep}.`);
+    lines.push(`5. Combine terms and append + C: ${integral.integralExpression}.`);
   } else if (type === "finite series equation") {
     lines.push("1. Read the coefficient, start index, end index, and variable value.");
     lines.push("2. Initialize total = 0.");
@@ -1839,10 +1950,26 @@ function buildPseudocode(target, inputs, expression, solution = {}) {
   if (solution.family === "power_rule_derivative") {
     lines.push("INPUT coefficient a");
     lines.push("INPUT exponent n");
-    lines.push("derivative_coefficient = a * n");
-    lines.push("derivative_exponent = n - 1");
-    lines.push("dy_dx = derivative_coefficient * x ^ derivative_exponent");
+    lines.push("FOR each signed term");
+    lines.push("  IF term is constant THEN derivative term = 0");
+    lines.push("  IF term is a*x^n THEN derivative term = a*n*x^(n-1)");
+    lines.push("  IF term is sin(x) THEN derivative term = cos(x)");
+    lines.push("  IF term is cos(x) THEN derivative term = -sin(x)");
+    lines.push("END FOR");
+    lines.push("dy_dx = combine derivative terms");
     lines.push("OUTPUT dy_dx");
+    lines.push("END");
+    return lines.join("\n");
+  }
+  if (solution.family === "power_rule_integral") {
+    lines.push("FOR each signed term");
+    lines.push("  IF term is constant c THEN integral term = c*x");
+    lines.push("  IF term is a*x^n THEN integral term = a/(n+1)*x^(n+1)");
+    lines.push("  IF term is sin(x) THEN integral term = -cos(x)");
+    lines.push("  IF term is cos(x) THEN integral term = sin(x)");
+    lines.push("END FOR");
+    lines.push("antiderivative = combine integral terms + C");
+    lines.push("OUTPUT antiderivative");
     lines.push("END");
     return lines.join("\n");
   }
@@ -1868,6 +1995,12 @@ function generateCode(model, language) {
     if (language === "python") return `def derivative(x: float) -> float:\n    return ${expression}`;
     if (language === "javascript" || language === "typescript") return `function derivative(x) {\n  return ${expression};\n}`;
     return `derivative(x) = ${model.solution.expression}`;
+  }
+  if (model.solution.family === "power_rule_integral") {
+    const expression = expressionForLanguage(model.solution.expression.replace(/\s*\+\s*C$/, ""), language);
+    if (language === "python") return `def antiderivative(x: float, C: float = 0) -> float:\n    return ${expression} + C`;
+    if (language === "javascript" || language === "typescript") return `function antiderivative(x, C = 0) {\n  return ${expression} + C;\n}`;
+    return `antiderivative(x) = ${model.solution.expression}`;
   }
 
   const name = functionName(model.target);

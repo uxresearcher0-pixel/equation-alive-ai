@@ -297,6 +297,8 @@ assertFormula(app, "A = 1/2*b*h", "general function", "return 0.5*b*h");
 assertFormula(app, "mean = sum/n", "general function", "return sum/n");
 assertFormula(app, "percent_change = (new-old)/old*100", "general function", "return (new-old)/old*100");
 assertFormula(app, "dy/dx = y = 5x^3", "differentiation request", "return 15*x**2");
+assertFormula(app, "d/dx 5x^3 + 2x^2 - 7", "differentiation request", "return 15*x**2+4*x");
+assertFormula(app, "integrate 5x^3 dx", "integration request", "return 1.25*x**4 + C");
 
 assertTargetSolve(app, "A = pi*r^2", "r", "sqrt(A/pi)");
 assertTargetSolve(app, "E = m*c^2", "c", "sqrt(E/m)");
@@ -327,6 +329,8 @@ assertTargetSolve(app, "mean = sum/n", "sum", "mean*n");
 assertTargetSolve(app, "percent_change = (new-old)/old*100", "new", "old*(1+percent_change/100)");
 assertTargetSolve(app, "P = I*V", "V", "unsupported_target(V)", false);
 assertTargetSolve(app, "dy/dx = y = 5x^3", "dy/dx", "15*x^2");
+assertTargetSolve(app, "d/dx 5x^3 + 2x^2 - 7", "dy/dx", "15*x^2+4*x");
+assertTargetSolve(app, "integrate 5x^3 dx", "∫dx", "1.25*x^4 + C");
 
 assertPipeline(app, "y = sin(x)", "graph", "trigonometric function");
 assertPipeline(app, "F = ma", "symbolic", "force equation");
@@ -367,8 +371,18 @@ const derivativeModel = app.buildFormulaModel("If y = 5x^3, then dy/dx");
 assert(derivativeModel.solution.family === "power_rule_derivative", "expected power rule derivative family");
 assert(derivativeModel.solution.derivative.ruleStep.includes("15*x^2"), "expected derivative rule step");
 assert(derivativeModel.algorithm.includes("Apply the power rule"), "expected derivative algorithm to explain power rule");
-assert(derivativeModel.pseudocode.includes("derivative_exponent = n - 1"), "expected derivative pseudocode");
+assert(derivativeModel.pseudocode.includes("combine derivative terms"), "expected derivative pseudocode");
 assert(app.generateCode(derivativeModel, "python").includes("def derivative"), "expected derivative code template");
+const polynomialDerivative = app.buildFormulaModel("d/dx 5x^3 + 2x^2 - 7");
+assert(polynomialDerivative.solution.expression === "15*x^2+4*x", "expected polynomial derivative");
+assert(polynomialDerivative.solution.derivative.ruleStep.includes("d/dx(-7) = 0"), "expected constant derivative rule");
+const trigDerivative = app.buildFormulaModel("differentiate sin(x)+cos(x)");
+assert(trigDerivative.solution.expression === "cos(x)-sin(x)", "expected trig derivative rules");
+const integralModel = app.buildFormulaModel("integrate 5x^3 dx");
+assert(integralModel.solution.family === "power_rule_integral", "expected power rule integral family");
+assert(integralModel.solution.expression === "1.25*x^4 + C", "expected power integral expression");
+assert(integralModel.pseudocode.includes("antiderivative = combine integral terms + C"), "expected integral pseudocode");
+assert(app.generateCode(integralModel, "javascript").includes("function antiderivative"), "expected integral code template");
 
 assert(app.formulaLibrary.length >= 50, `expected at least 50 library items, got ${app.formulaLibrary.length}`);
 const rk4 = app.formulaLibrary.find((item) => item.id === "rk4_method");
