@@ -892,11 +892,11 @@ function buildFormulaModel(input) {
   const left = parsedEquation.left;
   const right = parsedEquation.right;
   const variables = parsedEquation.variables;
-  const solveTargets = getSolveTargets({ type, left, variables, normalized });
+  const solveTargets = getSolveTargets({ type, left, right, variables, normalized, codeNormalized });
   const target = solveTarget.value && solveTargets.includes(solveTarget.value) ? solveTarget.value : solveTargets[0] || left || variables[0] || "result";
   const solution = solveForTarget({ type, left, right, target, normalized, codeNormalized });
   const codeExpression = solution.expression || right;
-  const inputs = ["power_rule_derivative", "power_rule_integral"].includes(solution.family) ? ["x"] : orderInputs({ type, normalized }, variables.filter((variable) => variable !== target));
+  const inputs = ["symbolic_derivative", "power_rule_derivative", "power_rule_integral", "definite_integral"].includes(solution.family) ? ["x"] : orderInputs({ type, normalized }, variables.filter((variable) => variable !== target));
 
   return {
     original: input,
@@ -942,6 +942,7 @@ function getSolveTargets(model) {
   const { type, left, variables, normalized } = model;
   if (type === "differentiation request" || /dy\s*\/\s*dx|derivative|differentiate|d\/dx/i.test(normalized)) return ["dy/dx"];
   if (type === "integration request" || /∫|integrate|integral|antiderivative/i.test(normalized)) return ["∫dx"];
+  if (parseLinearEquation(model)) return ["x"];
   const family = identifyFormulaFamily({ normalized });
   const template = getSolverTemplate(family);
   if (template?.targets?.length) return template.targets;
@@ -1561,22 +1562,110 @@ function parseDerivativeRequest(model) {
 
 function parseIntegrationRequest(model) {
   const source = normalizeForCode(model.normalized || model.original || "");
+  const definite = parseDefiniteIntegralRequest(source);
+  if (definite) return definite;
   const integralMatch = source.match(/(?:∫|integral(?:\s+of)?|integrate|antiderivative(?:\s+of)?)\s*[:=]?\s*(.+)$/i);
   const expressionSource = integralMatch ? integralMatch[1] : source;
   const right = extractRightSide(expressionSource).replace(/\*?\s*d\s*\*?\s*x$/i, "").trim();
   return parseIntegralExpression(right || expressionSource);
 }
 
+function parseDefiniteIntegralRequest(source) {
+  const clean = normalizeForCode(source).replace(/([+-]?\d+(?:\.\d+)?)\*to\b/gi, "$1 to").replace(/\s+/g, " ").trim();
+  const wordMatch = clean.match(/(?:integrate|integral(?:\s+of)?)\s+(.+?)\s+from\s+([+-]?\d+(?:\.\d+)?)\s+to\s+([+-]?\d+(?:\.\d+)?)/i);
+  const symbolMatch = clean.match(/∫\s*(?:_\s*([+-]?\d+(?:\.\d+)?)\s*\^\s*([+-]?\d+(?:\.\d+)?)|\(\s*([+-]?\d+(?:\.\d+)?)\s+to\s+([+-]?\d+(?:\.\d+)?)\s*\))\s*(.+?)\s*(?:d\s*\*?\s*x|dx)?$/i);
+  const match = wordMatch
+    ? { integrand: wordMatch[1], lower: Number(wordMatch[2]), upper: Number(wordMatch[3]) }
+    : symbolMatch
+      ? { integrand: symbolMatch[5], lower: Number(symbolMatch[1] ?? symbolMatch[3]), upper: Number(symbolMatch[2] ?? symbolMatch[4]) }
+      : null;
+  if (!match || !Number.isFinite(match.lower) || !Number.isFinite(match.upper)) return null;
+  const integrand = match.integrand.replace(/\*?\s*d\s*\*?\s*x$/i, "").trim();
+  const antiderivative = parseIntegralExpression(integrand);
+  if (!antiderivative) return null;
+  const cleanAntiderivative = antiderivative.integralExpression.replace(/\s*\+\s*C$/, "");
+  try {
+    const upperValue = evaluateWithValues(cleanAntiderivative, { x: match.upper });
+    const lowerValue = evaluateWithValues(cleanAntiderivative, { x: match.lower });
+    const value = upperValue - lowerValue;
+    if (!Number.isFinite(value)) return null;
+    return {
+      ...antiderivative,
+      definite: true,
+      lower: match.lower,
+      upper: match.upper,
+      upperValue,
+      lowerValue,
+      value,
+      integralExpression: formatNumber(value),
+      ruleStep: `${antiderivative.ruleStep}; evaluate F(${formatNumber(match.upper)}) - F(${formatNumber(match.lower)}) = ${formatNumber(value)}`,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
 function splitSignedTerms(expression) {
   const clean = normalizeForCode(expression)
     .replace(/\s+/g, "")
     .replace(/\*\*/g, "^")
-    .replace(/^\((.*)\)$/, "$1")
     .replace(/-/g, "+-");
   return clean.split("+").filter(Boolean);
 }
 
 function parseDerivativeExpression(expression) {
+  const clean = stripOuterParens(normalizeForCode(expression).replace(/\s+/g, "").replace(/\*\*/g, "^"));
+  if (hasTopLevelAdditive(clean)) return parseDerivativeSum(expression);
+  const quotient = splitTopLevelBinary(clean, "/");
+  if (quotient) {
+    const numerator = parseDerivativeExpression(quotient.left);
+    const denominator = parseDerivativeExpression(quotient.right);
+    if (!numerator || !denominator) return null;
+    const derivativeExpression = `(${wrapMath(numerator.derivativeExpression)}*${wrapMath(quotient.right)}-${wrapMath(quotient.left)}*${wrapMath(denominator.derivativeExpression)})/${wrapMath(quotient.right)}^2`;
+    return {
+      kind: "quotient",
+      terms: [numerator, denominator],
+      originalExpression: expression,
+      derivativeExpression,
+      ruleStep: `Quotient rule: (${quotient.left}/${quotient.right})' = (${numerator.derivativeExpression}*${quotient.right}-${quotient.left}*${denominator.derivativeExpression})/(${quotient.right})^2`,
+    };
+  }
+  const product = splitTopLevelBinary(clean, "*");
+  if (product && !isNumericLiteral(product.left) && !isNumericLiteral(product.right)) {
+    const first = parseDerivativeExpression(product.left);
+    const second = parseDerivativeExpression(product.right);
+    if (!first || !second) return null;
+    const derivativeExpression = `${wrapMath(first.derivativeExpression)}*${wrapMath(product.right)}+${wrapMath(product.left)}*${wrapMath(second.derivativeExpression)}`;
+    return {
+      kind: "product",
+      terms: [first, second],
+      originalExpression: expression,
+      derivativeExpression: combineSignedExpressions([derivativeExpression]),
+      ruleStep: `Product rule: (${product.left}*${product.right})' = ${first.derivativeExpression}*${product.right}+${product.left}*${second.derivativeExpression}`,
+    };
+  }
+  const chain = clean.match(/^\((.+)\)\^([+-]?\d+(?:\.\d+)?)$/);
+  if (chain) {
+    const inner = chain[1];
+    const exponent = Number(chain[2]);
+    const innerDerivative = parseDerivativeExpression(inner);
+    if (!innerDerivative || !Number.isFinite(exponent)) return null;
+    const outerDerivative = formatPowerDerivative(exponent, exponent - 1).replace(/\*x/g, `*(${inner})`).replace(/^x/, `(${inner})`);
+    const derivativeExpression = `${wrapMath(outerDerivative)}*${wrapMath(innerDerivative.derivativeExpression)}`;
+    return {
+      kind: "chain",
+      terms: [innerDerivative],
+      coefficient: 1,
+      exponent,
+      originalExpression: expression,
+      derivativeExpression,
+      ruleStep: `Chain rule: derivative of (${inner})^${formatNumber(exponent)} is ${outerDerivative} times inner derivative ${innerDerivative.derivativeExpression}`,
+    };
+  }
+  return parseDerivativeSum(expression);
+}
+
+function parseDerivativeSum(expression) {
   const terms = splitSignedTerms(expression).map((term) => {
     const parsed = parseDerivativeTerm(term);
     return parsed ? { ...parsed, source: term } : null;
@@ -1624,6 +1713,9 @@ function parseDerivativeTerm(term) {
   }
   if (/^sin\(x\)$/i.test(term)) return { kind: "trig", derivativeExpression: "cos(x)", ruleStep: "d/dx(sin(x)) = cos(x)" };
   if (/^cos\(x\)$/i.test(term)) return { kind: "trig", derivativeExpression: "-sin(x)", ruleStep: "d/dx(cos(x)) = -sin(x)" };
+  if (/^tan\(x\)$/i.test(term)) return { kind: "trig", derivativeExpression: "1/cos(x)^2", ruleStep: "d/dx(tan(x)) = sec^2(x) = 1/cos(x)^2" };
+  if (/^(?:ln|log)\(x\)$/i.test(term)) return { kind: "log", derivativeExpression: "1/x", ruleStep: "d/dx(ln(x)) = 1/x" };
+  if (/^exp\(x\)$/i.test(term) || /^e\^x$/i.test(term)) return { kind: "exponential", derivativeExpression: "exp(x)", ruleStep: "d/dx(e^x) = e^x" };
   return parsePowerRuleTerm(term);
 }
 
@@ -1637,6 +1729,8 @@ function parseIntegralTerm(term) {
   }
   if (/^sin\(x\)$/i.test(term)) return { kind: "trig", integralExpression: "-cos(x)", ruleStep: "∫ sin(x) dx = -cos(x)" };
   if (/^cos\(x\)$/i.test(term)) return { kind: "trig", integralExpression: "sin(x)", ruleStep: "∫ cos(x) dx = sin(x)" };
+  if (/^exp\(x\)$/i.test(term) || /^e\^x$/i.test(term)) return { kind: "exponential", integralExpression: "exp(x)", ruleStep: "∫ e^x dx = e^x" };
+  if (/^1\/x$/i.test(term)) return { kind: "log", integralExpression: "ln(abs(x))", ruleStep: "∫ 1/x dx = ln(|x|)" };
   const power = parsePowerRuleTerm(term);
   if (!power || Math.abs(power.exponent + 1) < EPSILON) return null;
   const integralCoefficient = power.coefficient / (power.exponent + 1);
@@ -1650,6 +1744,94 @@ function parseIntegralTerm(term) {
     integralExpression: formatPowerDerivative(integralCoefficient, integralExponent),
     ruleStep: `∫ ${term} dx = (${formatNumber(power.coefficient)}/${formatNumber(integralExponent)})*x^${formatNumber(integralExponent)}`,
   };
+}
+
+function parseLinearEquation(model) {
+  const left = String(model.left || "").trim();
+  const right = String(model.right || "").trim();
+  if (!left || !right) return null;
+  const leftLinear = parseLinearExpression(left);
+  const rightLinear = parseLinearExpression(right);
+  if (!leftLinear || !rightLinear) return null;
+  const coefficient = leftLinear.x - rightLinear.x;
+  const constant = rightLinear.constant - leftLinear.constant;
+  if (Math.abs(coefficient) < EPSILON) return null;
+  return {
+    target: "x",
+    coefficient,
+    constant,
+    expression: formatNumber(constant / coefficient),
+    ruleStep: `${formatNumber(coefficient)}*x = ${formatNumber(constant)}, so x = ${formatNumber(constant)}/${formatNumber(coefficient)} = ${formatNumber(constant / coefficient)}`,
+  };
+}
+
+function parseLinearExpression(expression) {
+  const terms = splitSignedTerms(expression);
+  if (!terms.length) return null;
+  return terms.reduce((acc, term) => {
+    if (!acc) return null;
+    if (isNumericLiteral(term)) return { x: acc.x, constant: acc.constant + Number(term) };
+    const xTerm = term.match(/^([+-]?(?:\d+(?:\.\d+)?|\.\d+)?)\*?x$/i);
+    if (!xTerm) return null;
+    const coefficientText = xTerm[1];
+    const coefficient = coefficientText === "" || coefficientText === "+" ? 1 : coefficientText === "-" ? -1 : Number(coefficientText);
+    return Number.isFinite(coefficient) ? { x: acc.x + coefficient, constant: acc.constant } : null;
+  }, { x: 0, constant: 0 });
+}
+
+function splitTopLevelBinary(expression, operator) {
+  let depth = 0;
+  for (let index = expression.length - 1; index >= 0; index -= 1) {
+    const char = expression[index];
+    if (char === ")") depth += 1;
+    else if (char === "(") depth -= 1;
+    else if (char === operator && depth === 0 && index > 0) {
+      return {
+        left: stripOuterParens(expression.slice(0, index)),
+        right: stripOuterParens(expression.slice(index + 1)),
+      };
+    }
+  }
+  return null;
+}
+
+function hasTopLevelAdditive(expression) {
+  let depth = 0;
+  for (let index = 0; index < expression.length; index += 1) {
+    const char = expression[index];
+    if (char === "(") depth += 1;
+    else if (char === ")") depth -= 1;
+    else if ((char === "+" || char === "-") && depth === 0 && index > 0) return true;
+  }
+  return false;
+}
+
+function stripOuterParens(value) {
+  let output = String(value || "").trim();
+  while (output.startsWith("(") && output.endsWith(")") && wrapsWholeExpression(output)) {
+    output = output.slice(1, -1).trim();
+  }
+  return output;
+}
+
+function wrapsWholeExpression(value) {
+  let depth = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char === "(") depth += 1;
+    if (char === ")") depth -= 1;
+    if (depth === 0 && index < value.length - 1) return false;
+  }
+  return depth === 0;
+}
+
+function wrapMath(expression) {
+  const value = String(expression || "0");
+  return /^[A-Za-z0-9_.]+(?:\^[A-Za-z0-9_.]+)?$/.test(value) || isNumericLiteral(value) ? value : `(${value})`;
+}
+
+function isNumericLiteral(value) {
+  return /^[+-]?\d+(?:\.\d+)?$/.test(String(value || ""));
 }
 
 function combineSignedExpressions(expressions) {
@@ -1702,19 +1884,31 @@ function solveForTarget(model) {
   const { type, left, right, target } = model;
   const family = identifyFormulaFamily(model);
   const template = getSolverTemplate(family);
-  const derivative = parseDerivativeRequest(model);
+  const isDerivativeRequest = type === "differentiation request" || /dy\s*\/\s*dx|derivative|differentiate|d\/dx/i.test(model.normalized || "");
+  const derivative = isDerivativeRequest ? parseDerivativeRequest(model) : null;
   if (derivative) {
     return {
       target: "dy/dx",
       expression: derivative.derivativeExpression,
-      note: `Power rule: ${derivative.ruleStep}.`,
+      note: `Differentiation rules: ${derivative.ruleStep}.`,
       supported: true,
       family: "power_rule_derivative",
       derivative,
     };
   }
-  const integral = parseIntegrationRequest(model);
+  const isIntegrationRequest = type === "integration request" || /∫|integrate|integral|antiderivative/i.test(model.normalized || "");
+  const integral = isIntegrationRequest ? parseIntegrationRequest(model) : null;
   if (integral) {
+    if (integral.definite) {
+      return {
+        target: "∫dx",
+        expression: integral.integralExpression,
+        note: `Definite integral: ${integral.ruleStep}.`,
+        supported: true,
+        family: "definite_integral",
+        integral,
+      };
+    }
     return {
       target: "∫dx",
       expression: integral.integralExpression,
@@ -1722,6 +1916,17 @@ function solveForTarget(model) {
       supported: true,
       family: "power_rule_integral",
       integral,
+    };
+  }
+  const linear = parseLinearEquation(model);
+  if (linear && target === "x") {
+    return {
+      target: "x",
+      expression: linear.expression,
+      note: `Linear equation solve: ${linear.ruleStep}.`,
+      supported: true,
+      family: "linear_equation",
+      linear,
     };
   }
   if (type === "finite series equation") {
@@ -1905,14 +2110,20 @@ function buildAlgorithm(type, target, inputs, expression, solution = {}) {
     lines.push("4. Suggest solving it manually or adding a new solver template.");
     return lines.join("\n");
   }
-  if (solution.family === "power_rule_derivative") {
+  if (solution.family === "symbolic_derivative" || solution.family === "power_rule_derivative") {
     const derivative = solution.derivative;
     lines.push("1. Split the expression into signed terms.");
-    lines.push("2. Apply the matching rule to each term: constant rule, power rule, or basic trig rule.");
+    lines.push("2. Apply the matching rule: constant, power, trig, product, quotient, chain, log, or exponential.");
     lines.push("3. Apply the power rule where needed: d/dx(a*x^n) = n*a*x^(n-1).");
-    lines.push("4. For each power term a*x^n, compute n*a*x^(n-1).");
+    lines.push("4. For product, quotient, or chain structures, solve the smaller inside derivatives first.");
     lines.push(`5. Rule steps: ${derivative.ruleStep}.`);
     lines.push(`6. Combine terms and return dy/dx = ${derivative.derivativeExpression}.`);
+  } else if (solution.family === "linear_equation") {
+    lines.push("1. Move all x terms to one side of the equation.");
+    lines.push("2. Move all number-only terms to the other side.");
+    lines.push("3. Divide both sides by the coefficient of x.");
+    lines.push(`4. Rule steps: ${solution.linear.ruleStep}.`);
+    lines.push(`5. Return x = ${solution.expression}.`);
   } else if (solution.family === "power_rule_integral") {
     const integral = solution.integral;
     lines.push("1. Split the integrand into signed terms.");
@@ -1920,6 +2131,13 @@ function buildAlgorithm(type, target, inputs, expression, solution = {}) {
     lines.push("3. For each power term a*x^n, compute a/(n+1)*x^(n+1), where n != -1.");
     lines.push(`4. Rule steps: ${integral.ruleStep}.`);
     lines.push(`5. Combine terms and append + C: ${integral.integralExpression}.`);
+  } else if (solution.family === "definite_integral") {
+    const integral = solution.integral;
+    lines.push("1. Find the antiderivative F(x) of the integrand.");
+    lines.push(`2. Substitute the upper bound ${formatNumber(integral.upper)} into F(x).`);
+    lines.push(`3. Substitute the lower bound ${formatNumber(integral.lower)} into F(x).`);
+    lines.push("4. Subtract lower result from upper result.");
+    lines.push(`5. Return the signed area value ${integral.integralExpression}.`);
   } else if (type === "finite series equation") {
     lines.push("1. Read the coefficient, start index, end index, and variable value.");
     lines.push("2. Initialize total = 0.");
@@ -1957,7 +2175,7 @@ function buildPseudocode(target, inputs, expression, solution = {}) {
     lines.push("END");
     return lines.join("\n");
   }
-  if (solution.family === "power_rule_derivative") {
+  if (solution.family === "symbolic_derivative" || solution.family === "power_rule_derivative") {
     lines.push("INPUT coefficient a");
     lines.push("INPUT exponent n");
     lines.push("FOR each signed term");
@@ -1965,6 +2183,9 @@ function buildPseudocode(target, inputs, expression, solution = {}) {
     lines.push("  IF term is a*x^n THEN derivative term = a*n*x^(n-1)");
     lines.push("  IF term is sin(x) THEN derivative term = cos(x)");
     lines.push("  IF term is cos(x) THEN derivative term = -sin(x)");
+    lines.push("  IF term is product u*v THEN derivative term = u_prime*v + u*v_prime");
+    lines.push("  IF term is quotient u/v THEN derivative term = (u_prime*v - u*v_prime)/v^2");
+    lines.push("  IF term is composite outer(inner) THEN derivative term = outer_prime(inner)*inner_prime");
     lines.push("END FOR");
     lines.push("dy_dx = combine derivative terms");
     lines.push("OUTPUT dy_dx");
@@ -1980,6 +2201,23 @@ function buildPseudocode(target, inputs, expression, solution = {}) {
     lines.push("END FOR");
     lines.push("antiderivative = combine integral terms + C");
     lines.push("OUTPUT antiderivative");
+    lines.push("END");
+    return lines.join("\n");
+  }
+  if (solution.family === "definite_integral") {
+    lines.push("F = antiderivative(integrand)");
+    lines.push(`upper_value = F(${formatNumber(solution.integral.upper)})`);
+    lines.push(`lower_value = F(${formatNumber(solution.integral.lower)})`);
+    lines.push("area = upper_value - lower_value");
+    lines.push("OUTPUT area");
+    lines.push("END");
+    return lines.join("\n");
+  }
+  if (solution.family === "linear_equation") {
+    lines.push("MOVE x terms to left side");
+    lines.push("MOVE constants to right side");
+    lines.push("DIVIDE by x coefficient");
+    lines.push("OUTPUT x");
     lines.push("END");
     return lines.join("\n");
   }
@@ -2000,7 +2238,7 @@ function generateCode(model, language) {
   }
   if (model.type === "finite series equation") return generateSeriesCode(model, language);
   if (model.type === "piecewise equation") return generatePiecewiseCode(model, language);
-  if (model.solution.family === "power_rule_derivative") {
+  if (model.solution.family === "symbolic_derivative" || model.solution.family === "power_rule_derivative") {
     const expression = expressionForLanguage(model.solution.expression, language);
     if (language === "python") return `def derivative(x: float) -> float:\n    return ${expression}`;
     if (language === "javascript" || language === "typescript") return `function derivative(x) {\n  return ${expression};\n}`;
@@ -2011,6 +2249,15 @@ function generateCode(model, language) {
     if (language === "python") return `def antiderivative(x: float, C: float = 0) -> float:\n    return ${expression} + C`;
     if (language === "javascript" || language === "typescript") return `function antiderivative(x, C = 0) {\n  return ${expression} + C;\n}`;
     return `antiderivative(x) = ${model.solution.expression}`;
+  }
+  if (model.solution.family === "definite_integral") {
+    const antiderivative = expressionForLanguage(model.solution.integral.integralExpression, language);
+    const lower = formatNumber(model.solution.integral.lower);
+    const upper = formatNumber(model.solution.integral.upper);
+    const base = expressionForLanguage(model.solution.integral.value ?? model.solution.expression, language);
+    if (language === "python") return `def definite_integral() -> float:\n    lower = ${lower}\n    upper = ${upper}\n    return ${base}`;
+    if (language === "javascript" || language === "typescript") return `function definiteIntegral() {\n  const lower = ${lower};\n  const upper = ${upper};\n  return ${base};\n}`;
+    return `definite_integral = ${model.solution.expression} from F(x) = ${antiderivative}`;
   }
 
   const name = functionName(model.target);
@@ -2058,9 +2305,11 @@ function expressionForLanguage(expression, language) {
     output = output.replace(/\(([^()]+)\)\s*\*\*\s*([A-Za-z0-9_.]+)/g, "Math.pow(($1), $2)");
     output = output.replace(/([A-Za-z0-9_.()]+)\s*\*\*\s*([A-Za-z0-9_.()]+)/g, "Math.pow($1, $2)");
     output = output.replace(/\bsin\(/g, "Math.sin(").replace(/\bcos\(/g, "Math.cos(").replace(/\btan\(/g, "Math.tan(").replace(/\bsqrt\(/g, "Math.sqrt(");
+    output = output.replace(/\bln\(/g, "Math.log(").replace(/\blog\(/g, "Math.log(").replace(/\bexp\(/g, "Math.exp(").replace(/\babs\(/g, "Math.abs(");
   } else {
     output = output.replace(/\bpi\b/g, "math.pi").replace(/\be\b/g, "math.e");
     output = output.replace(/\bsin\(/g, "math.sin(").replace(/\bcos\(/g, "math.cos(").replace(/\btan\(/g, "math.tan(").replace(/\bsqrt\(/g, "math.sqrt(");
+    output = output.replace(/\bln\(/g, "math.log(").replace(/\blog\(/g, "math.log(").replace(/\bexp\(/g, "math.exp(").replace(/\babs\(/g, "math.fabs(");
   }
   return output;
 }
@@ -3265,6 +3514,8 @@ function buildGroundLevelBreakdown(model = state.formulaModel) {
   if (!model?.solution) return ["Enter a math problem to see a beginner-friendly explanation."];
   if (model.solution.family === "power_rule_derivative") return buildDerivativeGroundBreakdown(model.solution.derivative);
   if (model.solution.family === "power_rule_integral") return buildIntegralGroundBreakdown(model.solution.integral);
+  if (model.solution.family === "definite_integral") return buildDefiniteIntegralGroundBreakdown(model.solution.integral);
+  if (model.solution.family === "linear_equation") return buildLinearEquationGroundBreakdown(model);
   return [
     `We start with: ${model.normalized}.`,
     `The system is trying to find: ${model.solution.target || model.target}.`,
@@ -3276,6 +3527,41 @@ function buildGroundLevelBreakdown(model = state.formulaModel) {
 }
 
 function buildDerivativeGroundBreakdown(derivative) {
+  if (derivative.kind === "product") {
+    return [
+      "Goal: find dy/dx. This expression is a multiplication of two changing parts.",
+      `Start with: y = ${derivative.originalExpression}.`,
+      "Name the first part u and the second part v.",
+      "Product rule says: derivative of u*v is u'v + uv'.",
+      "That means: change the first part and keep the second part, then keep the first part and change the second part.",
+      `Rule work: ${derivative.ruleStep}.`,
+      `Final answer: dy/dx = ${derivative.derivativeExpression}.`,
+      "Common mistake to avoid: do not only multiply the two separate derivatives. Use two pieces: u'v and uv'.",
+    ];
+  }
+  if (derivative.kind === "quotient") {
+    return [
+      "Goal: find dy/dx. This expression is a fraction where the top and bottom can both change.",
+      `Start with: y = ${derivative.originalExpression}.`,
+      "Name the top part u and the bottom part v.",
+      "Quotient rule says: derivative of u/v is (u'v - uv') / v^2.",
+      "First change the top and keep the bottom. Then subtract: keep the top and change the bottom.",
+      "Finally divide by the bottom squared.",
+      `Rule work: ${derivative.ruleStep}.`,
+      `Final answer: dy/dx = ${derivative.derivativeExpression}.`,
+      "Common mistake to avoid: keep the minus sign in the middle.",
+    ];
+  }
+  if (derivative.kind === "chain") {
+    return [
+      "Goal: find dy/dx. This expression has an outside part and an inside part.",
+      `Start with: y = ${derivative.originalExpression}.`,
+      "Chain rule says: change the outside first, keep the inside sitting there, then multiply by the change of the inside.",
+      `Rule work: ${derivative.ruleStep}.`,
+      `Final answer: dy/dx = ${derivative.derivativeExpression}.`,
+      "Common mistake to avoid: do not forget to multiply by the inside derivative.",
+    ];
+  }
   const lines = [
     "Goal: find dy/dx. That means we want to know how y changes when x changes.",
     `Start with the expression: y = ${derivative.originalExpression}.`,
@@ -3289,6 +3575,10 @@ function buildDerivativeGroundBreakdown(derivative) {
     }
     if (term.kind === "trig") {
       lines.push(`Use the memorized trigonometry derivative rule: ${term.ruleStep}.`);
+      return;
+    }
+    if (term.kind === "log" || term.kind === "exponential") {
+      lines.push(`Use the memorized ${term.kind} derivative rule: ${term.ruleStep}.`);
       return;
     }
     lines.push(`This is a power of x. The coefficient is ${formatNumber(term.coefficient)}.`);
@@ -3321,6 +3611,10 @@ function buildIntegralGroundBreakdown(integral) {
       lines.push(`Use the memorized trigonometry integral rule: ${term.ruleStep}.`);
       return;
     }
+    if (term.kind === "log" || term.kind === "exponential") {
+      lines.push(`Use the memorized ${term.kind} integral rule: ${term.ruleStep}.`);
+      return;
+    }
     lines.push(`This is a power of x with coefficient ${formatNumber(term.coefficient)} and exponent ${formatNumber(term.exponent)}.`);
     lines.push("Power integral rule: increase the exponent by 1, then divide by the new exponent.");
     lines.push(`Increase exponent: ${formatNumber(term.exponent)} + 1 = ${formatNumber(term.integralExponent)}.`);
@@ -3331,6 +3625,35 @@ function buildIntegralGroundBreakdown(integral) {
   lines.push(`Final answer: ${integral.integralExpression}.`);
   lines.push("Common mistake to avoid: do not forget + C.");
   return lines;
+}
+
+function buildDefiniteIntegralGroundBreakdown(integral) {
+  return [
+    "Goal: find the total signed area over an interval.",
+    `Start with the integrand: ${integral.originalExpression}.`,
+    `The lower bound is ${formatNumber(integral.lower)} and the upper bound is ${formatNumber(integral.upper)}.`,
+    "First find the antiderivative F(x). This is the reverse-derivative expression.",
+    `Rule work: ${integral.ruleStep}.`,
+    `Upper result: F(${formatNumber(integral.upper)}) = ${formatNumber(integral.upperValue)}.`,
+    `Lower result: F(${formatNumber(integral.lower)}) = ${formatNumber(integral.lowerValue)}.`,
+    `Subtract upper minus lower: ${formatNumber(integral.upperValue)} - ${formatNumber(integral.lowerValue)} = ${formatNumber(integral.value)}.`,
+    `Final answer: definite integral = ${formatNumber(integral.value)}.`,
+    "Common mistake to avoid: do not add + C for a definite integral; the subtraction cancels it.",
+  ];
+}
+
+function buildLinearEquationGroundBreakdown(model) {
+  const linear = model.solution.linear;
+  return [
+    `Start with the equation: ${model.left} = ${model.right}.`,
+    "Goal: find x. That means we want x alone on one side.",
+    "Collect all x parts together and collect number-only parts together.",
+    `After collecting: ${formatNumber(linear.coefficient)}*x = ${formatNumber(linear.constant)}.`,
+    `Now divide both sides by ${formatNumber(linear.coefficient)}.`,
+    `x = ${formatNumber(linear.constant)} / ${formatNumber(linear.coefficient)}.`,
+    `Final answer: x = ${linear.expression}.`,
+    "Common mistake to avoid: when a number moves across the equals sign, its sign changes.",
+  ];
 }
 
 const FAMILY_DIMENSIONS = {
@@ -3427,7 +3750,8 @@ function toJavaScriptExpression(expression) {
     .replace(/\btan\s*\(/g, "Math.tan(")
     .replace(/\blog\s*\(/g, "Math.log10(")
     .replace(/\bln\s*\(/g, "Math.log(")
-    .replace(/\bexp\s*\(/g, "Math.exp(");
+    .replace(/\bexp\s*\(/g, "Math.exp(")
+    .replace(/\babs\s*\(/g, "Math.abs(");
   output = output.replace(/([A-Za-z_][A-Za-z0-9_]*)/g, (token) => token.startsWith("Math") ? token : token);
   return output;
 }
