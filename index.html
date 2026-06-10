@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Equation Alive AI</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <aside class="sidebar" aria-label="Main navigation">
+      <div class="brand-card">
+        <div class="brand-mark">Σ</div>
+        <div>
+          <span>Workspace</span>
+          <strong>Equation Alive AI</strong>
+        </div>
+      </div>
+      <nav class="nav-group" aria-label="Main menu">
+        <p>Main Menu</p>
+        <a class="active" href="#input-title"><span>⌂</span> Dashboard</a>
+        <a href="#visual-title"><span>◌</span> Visualizer</a>
+        <a href="#library-title"><span>▦</span> Formula Library</a>
+        <a href="#solver-title"><span>{ }</span> Code Solver</a>
+        <a href="#verification-title"><span>✓</span> Verification</a>
+        <a href="#accessibility-title"><span>HC</span> Accessibility</a>
+        <a href="#platform-title"><span>⌘</span> Platform</a>
+      </nav>
+      <nav class="nav-group" aria-label="Settings">
+        <p>System</p>
+        <button id="contrastToggle" class="nav-button" type="button"><span>HC</span> High Contrast</button>
+        <button id="motionToggle" class="nav-button" type="button"><span>RM</span> Reduced Motion</button>
+      </nav>
+    </aside>
+
+    <header class="topbar">
+      <div class="breadcrumb"><span>Dashboard</span><span>›</span><strong>Equation Studio</strong></div>
+      <div class="search-box" role="search"><span>⌕</span><input type="search" aria-label="Search equations" placeholder="Search equations..." /></div>
+    </header>
+
+    <main class="workspace">
+      <section class="dashboard-intro" aria-labelledby="dashboard-title">
+        <div>
+          <p class="eyebrow">Equation Alive AI</p>
+          <h1 id="dashboard-title">Welcome back, Shahriar</h1>
+        </div>
+        <div class="quick-stats" aria-label="Workspace summary">
+          <div><span>Formula Mode</span><strong>Live</strong></div>
+          <div><span>Solver</span><strong>Linked</strong></div>
+          <div><span>Export</span><strong>Ready</strong></div>
+        </div>
+      </section>
+
+      <section class="panel input-panel" aria-labelledby="input-title">
+        <div class="section-heading">
+          <div><p class="eyebrow">Input engine</p><h2 id="input-title">Equation workspace</h2></div>
+          <span id="statusPill" class="status-pill">Ready</span>
+        </div>
+
+        <label class="field-label" for="equationInput">Equation, formula, or problem statement</label>
+        <div class="math-editor-toolbar" aria-label="Math editor tools">
+          <div class="toolbar-group">
+            <span>Structure</span>
+            <button type="button" data-wrap-start="{" data-wrap-end="}/{ }">frac</button>
+            <button type="button" data-wrap-start="_{" data-wrap-end="}">sub</button>
+            <button type="button" data-wrap-start="^{" data-wrap-end="}">sup</button>
+            <button type="button" data-wrap-start="sqrt(" data-wrap-end=")">root</button>
+            <button type="button" data-wrap-start="(" data-wrap-end=")">()</button>
+          </div>
+          <div class="toolbar-group">
+            <span>Operators</span>
+            <button type="button" data-insert="Σ(k=1 to n) [ ]">Σ</button>
+            <button type="button" data-insert="∫(a to b) f(x) dx">∫</button>
+            <button type="button" data-insert="lim(x→a) f(x)">lim</button>
+            <button type="button" data-wrap-start="|" data-wrap-end="|">|x|</button>
+            <button type="button" data-insert="a mod n">mod</button>
+          </div>
+          <div class="toolbar-group">
+            <span>Layout</span>
+            <button type="button" data-insert="cases{α if a = b; β if a ≠ b}">cases</button>
+            <button type="button" data-insert="[[a11, a12], [a21, a22]]">matrix</button>
+            <button type="button" data-insert="align{y = mx + b; m = (y2-y1)/(x2-x1)}">align</button>
+            <button type="button" data-insert="theorem{title: Euler theorem; statement: e^{ix}=cos(x)+i sin(x)}">theorem</button>
+            <button type="button" data-insert="proof{Given the identity; apply algebra; therefore result follows}">proof</button>
+          </div>
+        </div>
+
+        <section class="composer-shell" aria-labelledby="composer-title">
+          <div class="composer-header">
+            <div><span class="mini-label">Structured editor</span><h3 id="composer-title">Block-based math composer</h3></div>
+            <div class="composer-actions">
+              <button id="composerAddExpression" type="button" class="secondary-button">Add expression</button>
+              <button id="composerReset" type="button" class="secondary-button">Reset from editor</button>
+            </div>
+          </div>
+          <p class="composer-copy">Build equations from reusable math blocks while keeping the renderer, solver, verification, and code generator linked.</p>
+          <div id="composerPalette" class="composer-palette" aria-label="Math block palette">
+            <button type="button" data-composer-template="fraction">Fraction</button>
+            <button type="button" data-composer-template="power">Power</button>
+            <button type="button" data-composer-template="subscript">Subscript</button>
+            <button type="button" data-composer-template="root">Root</button>
+            <button type="button" data-composer-template="sum">Summation</button>
+            <button type="button" data-composer-template="integral">Integral</button>
+            <button type="button" data-composer-template="limit">Limit</button>
+            <button type="button" data-composer-template="vector">Vector</button>
+            <button type="button" data-composer-template="matrix">Matrix</button>
+            <button type="button" data-composer-template="cases">Cases</button>
+            <button type="button" data-composer-template="aligned">Aligned</button>
+            <button type="button" data-composer-template="theorem">Theorem</button>
+            <button type="button" data-composer-template="proof">Proof</button>
+            <button type="button" data-composer-template="bracket">Bracket</button>
+            <button type="button" data-composer-template="modulo">Modulo</button>
+          </div>
+          <div id="structuredComposer" class="structured-composer" aria-live="polite"></div>
+          <div class="composer-footer"><span class="mini-label">Composer output</span><pre id="composerOutput" class="presenter-source"></pre></div>
+        </section>
+
+        <textarea id="equationInput" spellcheck="false" rows="5" aria-describedby="inputHint">s = ut + 1/2at²</textarea>
+        <p id="inputHint" class="hint">Supports sigma notation, fractions, powers, roots, matrices, cases, implicit multiplication, and physics formulas.</p>
+        <div id="inputIntentPanel" class="input-intent-panel" aria-label="Detected mathematical intent"></div>
+
+        <div class="formula-preview presenter-grid" aria-label="Formula preview">
+          <div>
+            <span class="mini-label">Rendered formula</span>
+            <div id="mathPreview" class="math-preview"></div>
+            <p id="mathAccessibleText" class="math-accessible-text"></p>
+          </div>
+          <div class="presenter-panel">
+            <span class="mini-label">Presented mathematics</span>
+            <div id="mathPresenter" class="math-presenter"></div>
+            <div class="presenter-meta">
+              <div><span class="mini-label">Canonical LaTeX</span><pre id="mathLatexSource" class="presenter-source"></pre></div>
+              <div><span class="mini-label">Textbook form</span><pre id="mathTextbookForm" class="presenter-source"></pre></div>
+            </div>
+          </div>
+          <span id="formulaStatus" class="formula-status">Linked</span>
+        </div>
+
+        <div class="keyboard" aria-label="Math keyboard">
+          <button type="button" data-insert="\\frac{a}{b}">a/b</button>
+          <button type="button" data-insert="sqrt(a + b)">sqrt</button>
+          <button type="button" data-insert="∫(b to a) dx">∫</button>
+          <button type="button" data-insert="cases{α if a = b; β if a ≠ b}">cases</button>
+          <button type="button" data-insert="sin(x)">sin</button>
+          <button type="button" data-insert="cos(x)">cos</button>
+          <button type="button" data-insert="x^2">x^2</button>
+          <button type="button" data-insert="pi">pi</button>
+          <button type="button" data-insert="Σ(k=1 to 10) [sin(kx)/k]">Σ</button>
+        </div>
+
+        <label class="field-label" for="exampleSelect">Example gallery</label>
+        <select id="exampleSelect">
+          <option value="">Custom equation</option>
+          <option value="y = sin(x)">Trigonometric wave</option>
+          <option value="y = x^2 - 3x + 2">Quadratic curve</option>
+          <option value="x^2 + y^2 = 25">Circle</option>
+          <option value="F = ma">Newton force equation</option>
+          <option value="E = m*c^2">Mass-energy equivalence</option>
+          <option value="V = I*R">Ohm's law</option>
+          <option value="s = ut + 1/2at^2">Physics kinematics</option>
+          <option value="A = P*(1+r/n)^(n*t)">Compound interest</option>
+          <option value="y = 6 Σ(k=1 to 12) [sin((2k + 1)x) / (2k + 1)]">Finite sine series</option>
+          <option value="fx = cases{α if a = b; β if a ≠ b}">Piecewise cases</option>
+          <option value="A = [[a1, b1], [c1, d1]]">Matrix layout</option>
+        </select>
+
+        <div class="mode-grid" aria-label="Visualization modes">
+          <label><input type="checkbox" value="graph" checked /> Graph</label>
+          <label><input type="checkbox" value="animation" checked /> Animation</label>
+          <label><input type="checkbox" value="diagram" checked /> Diagram</label>
+          <label><input type="checkbox" value="sound" checked /> Sound</label>
+          <label><input type="checkbox" value="verification" checked /> Proof</label>
+          <label><input type="checkbox" value="explanation" checked /> Steps</label>
+        </div>
+        <div id="parameterControls" class="parameter-stack" aria-label="Parameter controls"></div>
+        <button id="generateButton" class="primary-button" type="button">Generate experience</button>
+        <div id="errorBox" class="error-box" role="alert" hidden></div>
+      </section>
+
+      <section class="visual-stage" aria-labelledby="visual-title">
+        <div class="stage-header">
+          <div><p class="eyebrow">Visualization engine</p><h2 id="visual-title">Live mathematical view</h2></div>
+          <div class="segmented" role="group" aria-label="View selector">
+            <button type="button" class="active" data-view="graph">Graph</button>
+            <button type="button" data-view="components">Components</button>
+            <button type="button" data-view="simulation">Simulation</button>
+          </div>
+        </div>
+        <canvas id="graphCanvas" width="1100" height="640" aria-label="Generated equation graph"></canvas>
+        <p id="graphSummary" class="graph-summary" aria-live="polite"></p>
+        <div id="symbolicVisualization" class="symbolic-visualization" aria-label="Symbolic visualization summary"></div>
+        <div class="audio-row">
+          <button id="playAudio" class="secondary-button" type="button">Play sound</button>
+          <button id="stopAudio" class="secondary-button" type="button">Stop</button>
+          <div class="meter" aria-label="Audio waveform meter"><span id="meterFill"></span></div>
+        </div>
+      </section>
+
+      <aside class="panel insight-panel" aria-labelledby="insight-title">
+        <div class="section-heading"><div><p class="eyebrow">AI explanation layer</p><h2 id="insight-title">Meaning and verification</h2></div></div>
+        <div class="metric-grid">
+          <div><span>Type</span><strong id="typeMetric">-</strong></div>
+          <div><span>Samples</span><strong id="sampleMetric">-</strong></div>
+          <div><span>Max error</span><strong id="errorMetric">-</strong></div>
+          <div><span>Status</span><strong id="verifyMetric">-</strong></div>
+        </div>
+        <div class="tabs" role="tablist" aria-label="Insight tabs">
+          <button type="button" class="active" data-tab="explain">Explain</button>
+          <button type="button" data-tab="verify">Verify</button>
+          <button type="button" data-tab="export">Export</button>
+        </div>
+        <div id="explainTab" class="tab-panel"></div>
+        <div id="verifyTab" class="tab-panel" hidden></div>
+        <div id="exportTab" class="tab-panel" hidden>
+          <button id="exportPng" class="secondary-button wide" type="button">Export PNG</button>
+          <button id="exportSvg" class="secondary-button wide" type="button">Export SVG</button>
+          <button id="exportJson" class="secondary-button wide" type="button">Export JSON</button>
+          <button id="printReport" class="secondary-button wide" type="button">Print report</button>
+        </div>
+        <section class="recent" aria-labelledby="recent-title">
+          <h3 id="recent-title">Recent projects</h3>
+          <div class="project-actions">
+            <label>Project name<input id="projectNameInput" type="text" placeholder="Workspace snapshot" /></label>
+            <button id="saveProjectButton" class="secondary-button" type="button">Save project</button>
+            <button id="clearProjectsButton" class="secondary-button" type="button">Clear</button>
+          </div>
+          <div id="recentProjects" class="recent-list"></div>
+        </section>
+      </aside>
+
+      <section class="library-panel" aria-labelledby="library-title">
+        <div class="section-heading">
+          <div><p class="eyebrow">Formula Intelligence Library</p><h2 id="library-title">Math Knowledge Base</h2></div>
+          <span id="libraryCount" class="status-pill">0 stored</span>
+        </div>
+        <div class="library-tools">
+          <label>Search topic<input id="librarySearch" type="search" placeholder="Runge-Kutta, Fourier, Bayes..." /></label>
+          <label>Category<select id="libraryCategory"></select></label>
+          <label>Difficulty<select id="libraryDifficulty"><option value="all">All levels</option><option value="Foundation">Foundation</option><option value="Intermediate">Intermediate</option><option value="Advanced">Advanced</option></select></label>
+        </div>
+        <div id="libraryStats" class="library-stats" aria-label="Library intelligence summary"></div>
+        <div class="library-layout">
+          <div id="libraryList" class="library-list" aria-label="Stored formulas and algorithms"></div>
+          <article class="library-detail" aria-labelledby="libraryDetailTitle">
+            <div class="detail-topline"><span id="libraryDetailCategory">Numerical Methods</span><span id="libraryDetailDifficulty">Advanced</span></div>
+            <h3 id="libraryDetailTitle">Select a formula</h3>
+            <div id="libraryFormula" class="library-formula"></div>
+            <p id="libraryAccessibleText" class="math-accessible-text"></p>
+            <p id="libraryDescription"></p>
+            <div class="detail-grid">
+              <div><span>Inputs</span><strong id="libraryInputs">-</strong></div>
+              <div><span>Outputs</span><strong id="libraryOutputs">-</strong></div>
+              <div><span>Visualization</span><strong id="libraryVisualization">-</strong></div>
+              <div><span>Verification</span><strong id="libraryVerification">-</strong></div>
+              <div><span>Solver link</span><strong id="librarySolverSupport">-</strong></div>
+              <div><span>Solve targets</span><strong id="librarySolverTargets">-</strong></div>
+            </div>
+            <div class="library-actions"><button id="loadLibraryFormula" class="primary-button" type="button">Load into workspace</button><button id="copyLibraryCode" class="secondary-button" type="button">Copy library code</button></div>
+            <div class="library-learning-grid">
+              <section class="library-learning-block"><h4>Concept</h4><p id="libraryConcept"></p></section>
+              <section class="library-learning-block"><h4>Example problem</h4><p id="libraryExampleProblem"></p></section>
+              <section class="library-learning-block"><h4>Worked example</h4><pre id="libraryWorkedExample"></pre></section>
+              <section class="library-learning-block"><h4>Verification checklist</h4><pre id="libraryVerificationSteps"></pre></section>
+            </div>
+            <div class="library-learning-grid secondary-learning-grid">
+              <section class="library-learning-block"><h4>Prerequisites</h4><p id="libraryPrerequisites"></p></section>
+              <section class="library-learning-block"><h4>Related topics</h4><p id="libraryRelatedTopics"></p></section>
+              <section class="library-learning-block"><h4>Applications</h4><p id="libraryApplications"></p></section>
+              <section class="library-learning-block library-path-block"><h4>Learning path</h4><div id="libraryLearningPath" class="learning-path"></div></section>
+            </div>
+            <pre id="libraryAlgorithm"></pre>
+          </article>
+        </div>
+      </section>
+
+      <section class="solver-panel" aria-labelledby="solver-title">
+        <div class="section-heading">
+          <div><p class="eyebrow">Formula-to-code solver</p><h2 id="solver-title">Equation linked to algorithm, pseudocode, code, and solver output</h2></div>
+          <div class="solver-controls">
+            <label>Solve target<select id="solveTarget"></select></label>
+            <label>Language<select id="languageSelect"><option value="python">Python</option><option value="javascript">JavaScript</option></select></label>
+          </div>
+        </div>
+        <div class="solver-status-bar">
+          <span id="solverSupportBadge" class="solver-support-badge">Ready</span>
+          <div class="solver-status-copy"><strong id="solverSupportTitle">Solver status</strong><p id="solverSupportNote">Waiting for formula.</p></div>
+          <span id="solverFamilyTag" class="solver-family-tag">general_expression</span>
+        </div>
+        <div class="solver-grid">
+          <article class="solver-block"><h3>Math tree</h3><pre id="structureOutput"></pre></article>
+          <article class="solver-block"><h3>Algorithm</h3><pre id="algorithmOutput"></pre></article>
+          <article class="solver-block"><h3>Pseudocode</h3><pre id="pseudocodeOutput"></pre></article>
+          <article class="solver-block code-block"><div class="block-title-row"><h3>Programming code</h3><button id="copyCode" class="secondary-button" type="button">Copy code</button></div><pre id="codeOutput"></pre></article>
+          <article class="solver-block solver-output"><h3>Solver output</h3><pre id="solverOutput"></pre></article>
+        </div>
+      </section>
+
+      <section class="advanced-panel verification-engine-panel" aria-labelledby="verification-title">
+        <div class="section-heading"><div><p class="eyebrow">Verification engine</p><h2 id="verification-title">Confidence, domain, substitution, and unit checks</h2></div></div>
+        <div id="verificationReport" class="advanced-card-grid"></div>
+      </section>
+
+      <section class="advanced-panel accessibility-panel" aria-labelledby="accessibility-title">
+        <div class="section-heading"><div><p class="eyebrow">Accessibility mode</p><h2 id="accessibility-title">Narration, MathML, graph alt text, and keyboard guide</h2></div></div>
+        <div class="accessibility-grid">
+          <article><span>Narration</span><p id="accessibilityNarration"></p></article>
+          <article><span>Graph alt text</span><p id="graphAltText"></p></article>
+          <article>
+            <span>Keyboard graph exploration</span>
+            <p id="keyboardGraphGuide"></p>
+            <input id="graphExplorerRange" class="graph-explorer-range" type="range" min="0" max="0" value="0" aria-label="Explore graph sample point" />
+            <p id="graphExplorerOutput" class="graph-explorer-output"></p>
+          </article>
+          <article><span>MathML output</span><pre id="mathMlOutput"></pre></article>
+        </div>
+      </section>
+
+      <section class="advanced-panel platform-panel" aria-labelledby="platform-title">
+        <div class="section-heading"><div><p class="eyebrow">Advanced platform layers</p><h2 id="platform-title">Theorem explorer, knowledge graph, sandbox, and professor mode</h2></div></div>
+        <div class="platform-grid">
+          <article><h3>Theorem Explorer</h3><div id="theoremExplorer" class="platform-content"></div></article>
+          <article><h3>Math Knowledge Graph</h3><div id="knowledgeGraphPanel" class="platform-content"></div></article>
+          <article><h3>Simulation Sandbox Blueprint</h3><div id="sandboxBlueprint" class="platform-content"></div></article>
+          <article><h3>AI Professor Mode</h3><div id="professorMode" class="platform-content"></div></article>
+        </div>
+      </section>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/mathjs@15.2.0/lib/browser/math.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

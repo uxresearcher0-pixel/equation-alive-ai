@@ -1,0 +1,13 @@
+{
+  "name": "equation-alive-ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Equation Alive AI static MVP with formula visualization, code generation, and formula intelligence library.",
+  "scripts": {
+    "test": "node --check app.js && node tests/regression.test.js"
+  },
+  "dependencies": {
+    "katex": "^0.16.11",
+    "mathjs": "^15.2.0"
+  }
+}
