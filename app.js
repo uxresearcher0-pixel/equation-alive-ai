@@ -1577,7 +1577,10 @@ function splitSignedTerms(expression) {
 }
 
 function parseDerivativeExpression(expression) {
-  const terms = splitSignedTerms(expression).map(parseDerivativeTerm);
+  const terms = splitSignedTerms(expression).map((term) => {
+    const parsed = parseDerivativeTerm(term);
+    return parsed ? { ...parsed, source: term } : null;
+  });
   if (!terms.length || terms.some((term) => !term)) return null;
   const nonzero = terms.filter((term) => term.derivativeExpression !== "0");
   const derivativeExpression = combineSignedExpressions(nonzero.map((term) => term.derivativeExpression)) || "0";
@@ -1594,7 +1597,10 @@ function parseDerivativeExpression(expression) {
 }
 
 function parseIntegralExpression(expression) {
-  const terms = splitSignedTerms(expression).map(parseIntegralTerm);
+  const terms = splitSignedTerms(expression).map((term) => {
+    const parsed = parseIntegralTerm(term);
+    return parsed ? { ...parsed, source: term } : null;
+  });
   if (!terms.length || terms.some((term) => !term)) return null;
   return {
     terms,
@@ -1637,6 +1643,10 @@ function parseIntegralTerm(term) {
   const integralExponent = power.exponent + 1;
   return {
     kind: "power",
+    coefficient: power.coefficient,
+    exponent: power.exponent,
+    integralCoefficient,
+    integralExponent,
     integralExpression: formatPowerDerivative(integralCoefficient, integralExponent),
     ruleStep: `∫ ${term} dx = (${formatNumber(power.coefficient)}/${formatNumber(integralExponent)})*x^${formatNumber(integralExponent)}`,
   };
@@ -3251,6 +3261,78 @@ function renderVerificationCards(model = state.formulaModel) {
   `).join("")}</div>`;
 }
 
+function buildGroundLevelBreakdown(model = state.formulaModel) {
+  if (!model?.solution) return ["Enter a math problem to see a beginner-friendly explanation."];
+  if (model.solution.family === "power_rule_derivative") return buildDerivativeGroundBreakdown(model.solution.derivative);
+  if (model.solution.family === "power_rule_integral") return buildIntegralGroundBreakdown(model.solution.integral);
+  return [
+    `We start with: ${model.normalized}.`,
+    `The system is trying to find: ${model.solution.target || model.target}.`,
+    `The expression to use is: ${model.solution.expression}.`,
+    "Substitute the known values carefully.",
+    "Simplify one arithmetic operation at a time.",
+    `Final answer: ${model.solution.target || model.target} = ${model.solution.expression}.`,
+  ];
+}
+
+function buildDerivativeGroundBreakdown(derivative) {
+  const lines = [
+    "Goal: find dy/dx. That means we want to know how y changes when x changes.",
+    `Start with the expression: y = ${derivative.originalExpression}.`,
+    "Look at each separate term one by one.",
+  ];
+  derivative.terms.forEach((term, index) => {
+    lines.push(`Term ${index + 1}: ${term.source || term.originalExpression || term.derivativeExpression}.`);
+    if (term.kind === "constant") {
+      lines.push(`This term is only a number. A number does not change when x changes, so its derivative is 0.`);
+      return;
+    }
+    if (term.kind === "trig") {
+      lines.push(`Use the memorized trigonometry derivative rule: ${term.ruleStep}.`);
+      return;
+    }
+    lines.push(`This is a power of x. The coefficient is ${formatNumber(term.coefficient)}.`);
+    lines.push(`The exponent, or power, is ${formatNumber(term.exponent)}.`);
+    lines.push("Power rule: multiply the coefficient by the exponent, then reduce the exponent by 1.");
+    lines.push(`Multiply coefficient and exponent: ${formatNumber(term.coefficient)} * ${formatNumber(term.exponent)} = ${formatNumber(term.derivativeCoefficient)}.`);
+    lines.push(`Reduce the exponent: ${formatNumber(term.exponent)} - 1 = ${formatNumber(term.derivativeExponent)}.`);
+    lines.push(`So this term becomes: ${term.derivativeExpression}.`);
+  });
+  lines.push(`Now combine all non-zero derivative terms: ${derivative.derivativeExpression}.`);
+  lines.push(`Final answer: dy/dx = ${derivative.derivativeExpression}.`);
+  lines.push("Common mistake to avoid: do not change the coefficient alone; multiply it by the exponent first.");
+  return lines;
+}
+
+function buildIntegralGroundBreakdown(integral) {
+  const lines = [
+    "Goal: find the antiderivative. That means we are reversing differentiation.",
+    `Start with the integrand: ${integral.originalExpression}.`,
+    "Look at each separate term one by one.",
+  ];
+  integral.terms.forEach((term, index) => {
+    lines.push(`Term ${index + 1}: ${term.source || term.integralExpression}.`);
+    if (term.kind === "constant") {
+      lines.push("A constant integrates to that constant times x.");
+      lines.push(`So this term becomes: ${term.integralExpression}.`);
+      return;
+    }
+    if (term.kind === "trig") {
+      lines.push(`Use the memorized trigonometry integral rule: ${term.ruleStep}.`);
+      return;
+    }
+    lines.push(`This is a power of x with coefficient ${formatNumber(term.coefficient)} and exponent ${formatNumber(term.exponent)}.`);
+    lines.push("Power integral rule: increase the exponent by 1, then divide by the new exponent.");
+    lines.push(`Increase exponent: ${formatNumber(term.exponent)} + 1 = ${formatNumber(term.integralExponent)}.`);
+    lines.push(`Divide coefficient by new exponent: ${formatNumber(term.coefficient)} / ${formatNumber(term.integralExponent)} = ${formatNumber(term.integralCoefficient)}.`);
+    lines.push(`So this term becomes: ${term.integralExpression}.`);
+  });
+  lines.push("Because this is an indefinite integral, add + C at the end.");
+  lines.push(`Final answer: ${integral.integralExpression}.`);
+  lines.push("Common mistake to avoid: do not forget + C.");
+  return lines;
+}
+
 const FAMILY_DIMENSIONS = {
   force_law: { F: "force", m: "mass", a: "acceleration" },
   kinematics_displacement: { s: "length", u: "speed", v: "speed", a: "acceleration", t: "time" },
@@ -3550,9 +3632,11 @@ function buildSandboxBlueprint(model = state.formulaModel) {
 
 function buildProfessorModeModel(item = getSelectedLibraryItem(), model = state.formulaModel) {
   const topic = item?.title || model?.type || "Current formula";
+  const groundBreakdown = buildGroundLevelBreakdown(model);
   return {
     concept: item?.concept || item?.description || model?.solution?.note || "Understand the formula, identify inputs, solve the target, and verify the result.",
     demonstration: item?.workedExample || model?.algorithm || "Use the generated algorithm panel for the step-by-step demonstration.",
+    groundBreakdown,
     hints: [
       "Start by naming the target variable.",
       "List known values before substituting.",
@@ -3620,6 +3704,7 @@ function renderAdvancedLayers(model = state.formulaModel) {
     professorMode.innerHTML = `
       <article><span>Concept</span><p>${escapeHtml(professor.concept)}</p></article>
       <article><span>Demonstration</span><pre>${escapeHtml(professor.demonstration)}</pre></article>
+      <article><span>Ground level breakdown</span><ol>${professor.groundBreakdown.map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol></article>
       <article><span>Lesson flow</span><p>${escapeHtml(professor.lessonFlow.join(" -> "))}</p></article>
       <article><span>Hints</span><ul>${professor.hints.map((hint) => `<li>${escapeHtml(hint)}</li>`).join("")}</ul></article>
       <article><span>Quiz</span><p>${escapeHtml(professor.quiz)}</p></article>
@@ -3655,6 +3740,9 @@ function renderFormulaModule(model = state.formulaModel) {
     `Result: ${model.target} = ${model.solution.expression}`,
     `Family: ${model.solution.family || "general_expression"}`,
     `Note: ${model.solution.note}`,
+    "",
+    "Ground level breakdown:",
+    ...buildGroundLevelBreakdown(model).map((step, index) => `${index + 1}. ${step}`),
     `Clean LaTeX: ${model.cleanLatex}`,
   ].join("\n");
   renderSymbolicVisualization(model);
@@ -3897,7 +3985,7 @@ function renderSymbolicInsights(model) {
   errorMetric.textContent = "-";
   verifyMetric.textContent = "linked";
   graphSummary.textContent = `This ${model.type} is linked to the formula-to-code solver. Use the lower panel to inspect the math tree, algorithm, pseudocode, code, and solver output.`;
-  explainTab.innerHTML = `<ol><li>The input is parsed as ${escapeHtml(model.type)}.</li><li>The formula is normalized into a code-ready expression.</li><li>Variables are extracted and connected to solve targets.</li><li>The solver panel generates algorithm, pseudocode, and programming code from the same linked structure.</li></ol>`;
+  explainTab.innerHTML = `<ol>${buildGroundLevelBreakdown(model).map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol>`;
   verifyTab.innerHTML = `<ul><li>Formula linked successfully.</li><li>Parser: ${escapeHtml(model.parsedEquation?.errors?.length ? "fallback" : "Math.js")}</li><li>Detected variables: ${escapeHtml(model.variables.join(", ") || "none")}.</li><li>Detected operations: ${escapeHtml(model.structure.operations.join(", "))}.</li></ul>${renderVerificationCards(model)}`;
   renderSymbolicVisualization(model);
 }

@@ -373,6 +373,14 @@ assert(derivativeModel.solution.derivative.ruleStep.includes("15*x^2"), "expecte
 assert(derivativeModel.algorithm.includes("Apply the power rule"), "expected derivative algorithm to explain power rule");
 assert(derivativeModel.pseudocode.includes("combine derivative terms"), "expected derivative pseudocode");
 assert(app.generateCode(derivativeModel, "python").includes("def derivative"), "expected derivative code template");
+const groundBreakdown = app.buildGroundLevelBreakdown(derivativeModel).join("\n");
+assert(groundBreakdown.includes("how y changes"), "expected ground-level derivative meaning");
+assert(groundBreakdown.includes("coefficient is 5"), "expected coefficient explanation");
+assert(groundBreakdown.includes("exponent, or power, is 3"), "expected exponent explanation");
+assert(groundBreakdown.includes("5 * 3 = 15"), "expected arithmetic multiplication explanation");
+assert(groundBreakdown.includes("3 - 1 = 2"), "expected exponent reduction explanation");
+assert(groundBreakdown.includes("Final answer: dy/dx = 15*x^2"), "expected final answer in ground breakdown");
+assert(groundBreakdown.includes("Common mistake"), "expected common mistake warning");
 const polynomialDerivative = app.buildFormulaModel("d/dx 5x^3 + 2x^2 - 7");
 assert(polynomialDerivative.solution.expression === "15*x^2+4*x", "expected polynomial derivative");
 assert(polynomialDerivative.solution.derivative.ruleStep.includes("d/dx(-7) = 0"), "expected constant derivative rule");
@@ -383,6 +391,7 @@ assert(integralModel.solution.family === "power_rule_integral", "expected power 
 assert(integralModel.solution.expression === "1.25*x^4 + C", "expected power integral expression");
 assert(integralModel.pseudocode.includes("antiderivative = combine integral terms + C"), "expected integral pseudocode");
 assert(app.generateCode(integralModel, "javascript").includes("function antiderivative"), "expected integral code template");
+assert(app.buildGroundLevelBreakdown(integralModel).join("\n").includes("do not forget + C"), "expected integral common mistake");
 
 assert(app.formulaLibrary.length >= 50, `expected at least 50 library items, got ${app.formulaLibrary.length}`);
 const rk4 = app.formulaLibrary.find((item) => item.id === "rk4_method");
