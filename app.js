@@ -439,6 +439,7 @@ function hasExplicitSummation(input) {
 
 function classifyEquation(input) {
   const lower = input.toLowerCase();
+  if (/dy\s*\/\s*dx|differentiat|derivative|d\/dx/.test(lower)) return "differentiation request";
   if (hasExplicitSummation(input)) return "finite series equation";
   if (/cases\s*\{|if .*;|≠/.test(lower)) return "piecewise equation";
   if (/\[\[.*\]\]|\bmatrix\b/.test(lower)) return "matrix expression";
@@ -894,7 +895,7 @@ function buildFormulaModel(input) {
   const target = solveTarget.value && solveTargets.includes(solveTarget.value) ? solveTarget.value : solveTargets[0] || left || variables[0] || "result";
   const solution = solveForTarget({ type, left, right, target, normalized, codeNormalized });
   const codeExpression = solution.expression || right;
-  const inputs = orderInputs({ type, normalized }, variables.filter((variable) => variable !== target));
+  const inputs = solution.family === "power_rule_derivative" ? ["x"] : orderInputs({ type, normalized }, variables.filter((variable) => variable !== target));
 
   return {
     original: input,
@@ -938,6 +939,7 @@ function extractVariables(expression) {
 
 function getSolveTargets(model) {
   const { type, left, variables, normalized } = model;
+  if (type === "differentiation request" || /dy\s*\/\s*dx|derivative|differentiate|d\/dx/i.test(normalized)) return ["dy/dx"];
   const family = identifyFormulaFamily({ normalized });
   const template = getSolverTemplate(family);
   if (template?.targets?.length) return template.targets;
@@ -1545,10 +1547,69 @@ function buildApplications(item) {
   return appMap[item.solverFamily] || "Learning, worked examples, quick verification, and starter code generation.";
 }
 
+function parseDerivativeRequest(model) {
+  const source = normalizeForCode(model.normalized || model.original || "");
+  const sentenceMatch = source.match(/(?:if\s+)?y\s*=\s*([^,;]+?)\s*,?\s*then\s*(?:dy\s*\/\s*dx|d\s*\/\s*dx)/i);
+  if (sentenceMatch) return parsePowerRuleTerm(sentenceMatch[1]);
+  const derivativeMatch = source.match(/(?:dy\s*\/\s*dx|d\s*\/\s*dx|derivative(?:\s+of)?|differentiate)\s*[:=]?\s*(.+)$/i);
+  const expressionSource = derivativeMatch ? derivativeMatch[1] : source;
+  const right = extractRightSide(expressionSource).trim();
+  return parsePowerRuleTerm(right || expressionSource);
+}
+
+function parsePowerRuleTerm(expression) {
+  const clean = normalizeForCode(expression)
+    .replace(/\s+/g, "")
+    .replace(/\*\*/g, "^")
+    .replace(/^\((.*)\)$/, "$1");
+  const match = clean.match(/^([+-]?(?:\d+(?:\.\d+)?|\.\d+)?)\*?x(?:\^([+-]?\d+(?:\.\d+)?))?$/i);
+  if (!match) return null;
+  const coefficientText = match[1];
+  const coefficient = coefficientText === "" || coefficientText === "+" ? 1 : coefficientText === "-" ? -1 : Number(coefficientText);
+  const exponent = match[2] === undefined ? 1 : Number(match[2]);
+  if (!Number.isFinite(coefficient) || !Number.isFinite(exponent)) return null;
+  const derivativeCoefficient = coefficient * exponent;
+  const derivativeExponent = exponent - 1;
+  return {
+    coefficient,
+    exponent,
+    derivativeCoefficient,
+    derivativeExponent,
+    originalExpression: `${formatCoefficient(coefficient)}x${exponent === 1 ? "" : `^${formatNumber(exponent)}`}`,
+    derivativeExpression: formatPowerDerivative(derivativeCoefficient, derivativeExponent),
+    ruleStep: `dy/dx = ${formatNumber(exponent)} * ${formatCoefficient(coefficient)}x^(${formatNumber(exponent)}-1) = ${formatPowerDerivative(derivativeCoefficient, derivativeExponent)}`,
+  };
+}
+
+function formatCoefficient(value) {
+  if (value === 1) return "";
+  if (value === -1) return "-";
+  return formatNumber(value);
+}
+
+function formatPowerDerivative(coefficient, exponent) {
+  if (Math.abs(coefficient) < EPSILON) return "0";
+  const coeff = formatNumber(coefficient);
+  if (Math.abs(exponent) < EPSILON) return coeff;
+  if (Math.abs(exponent - 1) < EPSILON) return `${coeff}*x`;
+  return `${coeff}*x^${formatNumber(exponent)}`;
+}
+
 function solveForTarget(model) {
   const { type, left, right, target } = model;
   const family = identifyFormulaFamily(model);
   const template = getSolverTemplate(family);
+  const derivative = parseDerivativeRequest(model);
+  if (derivative) {
+    return {
+      target: "dy/dx",
+      expression: derivative.derivativeExpression,
+      note: `Power rule: ${derivative.ruleStep}.`,
+      supported: true,
+      family: "power_rule_derivative",
+      derivative,
+    };
+  }
   if (type === "finite series equation") {
     const series = parseSeries(extractRightSide(model.normalized));
     return {
@@ -1730,7 +1791,15 @@ function buildAlgorithm(type, target, inputs, expression, solution = {}) {
     lines.push("4. Suggest solving it manually or adding a new solver template.");
     return lines.join("\n");
   }
-  if (type === "finite series equation") {
+  if (solution.family === "power_rule_derivative") {
+    const derivative = solution.derivative;
+    lines.push("1. Identify the monomial as y = a*x^n.");
+    lines.push(`2. Read coefficient a = ${formatNumber(derivative.coefficient)} and exponent n = ${formatNumber(derivative.exponent)}.`);
+    lines.push("3. Apply the power rule: d/dx(a*x^n) = n*a*x^(n-1).");
+    lines.push(`4. Multiply n*a = ${formatNumber(derivative.derivativeCoefficient)}.`);
+    lines.push(`5. Reduce the exponent n-1 = ${formatNumber(derivative.derivativeExponent)}.`);
+    lines.push(`6. Return dy/dx = ${derivative.derivativeExpression}.`);
+  } else if (type === "finite series equation") {
     lines.push("1. Read the coefficient, start index, end index, and variable value.");
     lines.push("2. Initialize total = 0.");
     lines.push("3. For each k in the finite range, evaluate the term.");
@@ -1767,6 +1836,16 @@ function buildPseudocode(target, inputs, expression, solution = {}) {
     lines.push("END");
     return lines.join("\n");
   }
+  if (solution.family === "power_rule_derivative") {
+    lines.push("INPUT coefficient a");
+    lines.push("INPUT exponent n");
+    lines.push("derivative_coefficient = a * n");
+    lines.push("derivative_exponent = n - 1");
+    lines.push("dy_dx = derivative_coefficient * x ^ derivative_exponent");
+    lines.push("OUTPUT dy_dx");
+    lines.push("END");
+    return lines.join("\n");
+  }
   lines.push("VALIDATE inputs");
   lines.push(`${target} = ${expression}`);
   lines.push("VERIFY result against original formula");
@@ -1784,6 +1863,12 @@ function generateCode(model, language) {
   }
   if (model.type === "finite series equation") return generateSeriesCode(model, language);
   if (model.type === "piecewise equation") return generatePiecewiseCode(model, language);
+  if (model.solution.family === "power_rule_derivative") {
+    const expression = expressionForLanguage(model.solution.expression, language);
+    if (language === "python") return `def derivative(x: float) -> float:\n    return ${expression}`;
+    if (language === "javascript" || language === "typescript") return `function derivative(x) {\n  return ${expression};\n}`;
+    return `derivative(x) = ${model.solution.expression}`;
+  }
 
   const name = functionName(model.target);
   const params = model.inputs.length ? model.inputs : ["value"];

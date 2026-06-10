@@ -296,6 +296,7 @@ assertFormula(app, "A = l*w", "general function", "return l*w");
 assertFormula(app, "A = 1/2*b*h", "general function", "return 0.5*b*h");
 assertFormula(app, "mean = sum/n", "general function", "return sum/n");
 assertFormula(app, "percent_change = (new-old)/old*100", "general function", "return (new-old)/old*100");
+assertFormula(app, "dy/dx = y = 5x^3", "differentiation request", "return 15*x**2");
 
 assertTargetSolve(app, "A = pi*r^2", "r", "sqrt(A/pi)");
 assertTargetSolve(app, "E = m*c^2", "c", "sqrt(E/m)");
@@ -325,6 +326,7 @@ assertTargetSolve(app, "A = 1/2*b*h", "h", "2*A/b");
 assertTargetSolve(app, "mean = sum/n", "sum", "mean*n");
 assertTargetSolve(app, "percent_change = (new-old)/old*100", "new", "old*(1+percent_change/100)");
 assertTargetSolve(app, "P = I*V", "V", "unsupported_target(V)", false);
+assertTargetSolve(app, "dy/dx = y = 5x^3", "dy/dx", "15*x^2");
 
 assertPipeline(app, "y = sin(x)", "graph", "trigonometric function");
 assertPipeline(app, "F = ma", "symbolic", "force equation");
@@ -361,6 +363,12 @@ assert(casesModel.cleanLatex.includes("\\begin{cases}"), "expected cases latex t
 
 const modularModel = app.buildFormulaModel("a mod n");
 assert(modularModel.cleanLatex.includes("\\bmod"), "expected modular notation to use bmod");
+const derivativeModel = app.buildFormulaModel("If y = 5x^3, then dy/dx");
+assert(derivativeModel.solution.family === "power_rule_derivative", "expected power rule derivative family");
+assert(derivativeModel.solution.derivative.ruleStep.includes("15*x^2"), "expected derivative rule step");
+assert(derivativeModel.algorithm.includes("Apply the power rule"), "expected derivative algorithm to explain power rule");
+assert(derivativeModel.pseudocode.includes("derivative_exponent = n - 1"), "expected derivative pseudocode");
+assert(app.generateCode(derivativeModel, "python").includes("def derivative"), "expected derivative code template");
 
 assert(app.formulaLibrary.length >= 50, `expected at least 50 library items, got ${app.formulaLibrary.length}`);
 const rk4 = app.formulaLibrary.find((item) => item.id === "rk4_method");
