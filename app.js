@@ -439,6 +439,8 @@ function hasExplicitSummation(input) {
 
 function classifyEquation(input) {
   const lower = input.toLowerCase();
+  if (/^lim\b|^limit\b|lim\s*\(|\blimit\s+/.test(lower)) return "limit request";
+  if (/\bsystem\b|;[^;=]*=/.test(lower)) return "linear system";
   if (/dy\s*\/\s*dx|differentiat|derivative|d\/dx/.test(lower)) return "differentiation request";
   if (/∫|integrat|antiderivative/.test(lower)) return "integration request";
   if (hasExplicitSummation(input)) return "finite series equation";
@@ -940,8 +942,12 @@ function extractVariables(expression) {
 
 function getSolveTargets(model) {
   const { type, left, variables, normalized } = model;
+  if (type === "limit request") return ["limit"];
+  if (type === "linear system") return ["x,y"];
   if (type === "differentiation request" || /dy\s*\/\s*dx|derivative|differentiate|d\/dx/i.test(normalized)) return ["dy/dx"];
   if (type === "integration request" || /∫|integrate|integral|antiderivative/i.test(normalized)) return ["∫dx"];
+  if (parseQuadraticEquation(model)) return ["x"];
+  if (parseMatrixOperation(model)) return ["matrix"];
   if (parseLinearEquation(model)) return ["x"];
   const family = identifyFormulaFamily({ normalized });
   const template = getSolverTemplate(family);
@@ -1765,6 +1771,201 @@ function parseLinearEquation(model) {
   };
 }
 
+function parseQuadraticEquation(model) {
+  const left = String(model.left || "").replace(/^solve\s+/i, "").trim();
+  const right = String(model.right || "").trim();
+  if (!left || !right || !/x\^2|x\*\*2/i.test(`${left} ${right}`)) return null;
+  const leftPoly = parsePolynomialCoefficients(left);
+  const rightPoly = parsePolynomialCoefficients(right);
+  if (!leftPoly || !rightPoly) return null;
+  const a = leftPoly[2] - rightPoly[2];
+  const b = leftPoly[1] - rightPoly[1];
+  const c = leftPoly[0] - rightPoly[0];
+  if (Math.abs(a) < EPSILON) return null;
+  const discriminant = b * b - 4 * a * c;
+  if (discriminant < -EPSILON) {
+    return {
+      coefficients: { a, b, c },
+      discriminant,
+      roots: [],
+      expression: "no real roots",
+      ruleStep: `a=${formatNumber(a)}, b=${formatNumber(b)}, c=${formatNumber(c)}, discriminant=${formatNumber(discriminant)}. Negative discriminant means no real roots.`,
+    };
+  }
+  const rootPart = Math.sqrt(Math.max(0, discriminant));
+  const roots = [(-b + rootPart) / (2 * a), (-b - rootPart) / (2 * a)];
+  const uniqueRoots = Math.abs(roots[0] - roots[1]) < EPSILON ? [roots[0]] : roots;
+  return {
+    coefficients: { a, b, c },
+    discriminant,
+    roots: uniqueRoots,
+    expression: uniqueRoots.map((root) => `x=${formatNumber(root)}`).join(" or "),
+    ruleStep: `a=${formatNumber(a)}, b=${formatNumber(b)}, c=${formatNumber(c)}. Use x=(-b±sqrt(b^2-4ac))/(2a), discriminant=${formatNumber(discriminant)}.`,
+  };
+}
+
+function parsePolynomialCoefficients(expression) {
+  const terms = splitSignedTerms(expression);
+  if (!terms.length) return null;
+  const coefficients = [0, 0, 0];
+  for (const term of terms) {
+    if (isNumericLiteral(term)) {
+      coefficients[0] += Number(term);
+      continue;
+    }
+    const power = parsePowerRuleTerm(term);
+    if (!power || power.exponent < 0 || power.exponent > 2 || Math.abs(power.exponent - Math.round(power.exponent)) > EPSILON) return null;
+    coefficients[Math.round(power.exponent)] += power.coefficient;
+  }
+  return coefficients;
+}
+
+function parseLimitRequest(model) {
+  const source = normalizeForCode(model.normalized || model.original || "").replace(/\*of\b/gi, " of").replace(/\s+/g, " ").trim();
+  const compact = source.replace(/\s+/g, "");
+  const limMatch = compact.match(/^lim\(?x(?:->|→)([+-]?\d+(?:\.\d+)?)\)?(.+)$/i);
+  const wordMatch = source.match(/^limit\s+(?:as\s+)?x\s*(?:->|→|approaches)\s*([+-]?\d+(?:\.\d+)?)\s*(?:of)?\s*(.+)$/i);
+  const match = limMatch
+    ? { approach: Number(limMatch[1]), expression: limMatch[2] }
+    : wordMatch
+      ? { approach: Number(wordMatch[1]), expression: wordMatch[2] }
+      : null;
+  if (!match || !Number.isFinite(match.approach)) return null;
+  const expression = stripOuterParens(match.expression.replace(/^of/i, ""));
+  try {
+    const direct = evaluateWithValues(expression, { x: match.approach });
+    if (Number.isFinite(direct)) {
+      return {
+        expression: formatNumber(direct),
+        approach: match.approach,
+        originalExpression: expression,
+        method: "direct substitution",
+        value: direct,
+        ruleStep: `Substitute x=${formatNumber(match.approach)} directly into ${expression}; result is ${formatNumber(direct)}.`,
+      };
+    }
+  } catch (error) {
+    // Try numeric approach below.
+  }
+  try {
+    const h = 1e-5;
+    const leftValue = evaluateWithValues(expression, { x: match.approach - h });
+    const rightValue = evaluateWithValues(expression, { x: match.approach + h });
+    if (Number.isFinite(leftValue) && Number.isFinite(rightValue) && Math.abs(leftValue - rightValue) < 1e-3) {
+      const value = (leftValue + rightValue) / 2;
+      return {
+        expression: formatNumber(value),
+        approach: match.approach,
+        originalExpression: expression,
+        method: "two-sided numerical approach",
+        value,
+        leftValue,
+        rightValue,
+        ruleStep: `Direct substitution is not stable, so approach from both sides. Left≈${formatNumber(leftValue)}, right≈${formatNumber(rightValue)}, so limit≈${formatNumber(value)}.`,
+      };
+    }
+  } catch (error) {
+    return null;
+  }
+  return null;
+}
+
+function parse2x2System(model) {
+  const source = normalizeForCode(model.normalized || model.original || "").replace(/^solve\s+system\s*:?\s*/i, "");
+  const equations = source.split(/;|\n/).map((part) => part.trim()).filter(Boolean);
+  if (equations.length !== 2 || equations.some((equation) => !equation.includes("="))) return null;
+  const rows = equations.map((equation) => {
+    const [leftSide, ...rightParts] = equation.split("=");
+    const leftCoefficients = parseLinearExpressionXY(leftSide);
+    const rightCoefficients = parseLinearExpressionXY(rightParts.join("="));
+    if (!leftCoefficients || !rightCoefficients) return null;
+    return {
+      x: leftCoefficients.x - rightCoefficients.x,
+      y: leftCoefficients.y - rightCoefficients.y,
+      constant: rightCoefficients.constant - leftCoefficients.constant,
+    };
+  });
+  if (rows.some((row) => !row)) return null;
+  const determinant = rows[0].x * rows[1].y - rows[0].y * rows[1].x;
+  if (Math.abs(determinant) < EPSILON) return {
+    rows,
+    determinant,
+    expression: "no unique solution",
+    ruleStep: "The coefficient determinant is 0, so the system has no single unique solution.",
+  };
+  const x = (rows[0].constant * rows[1].y - rows[0].y * rows[1].constant) / determinant;
+  const y = (rows[0].x * rows[1].constant - rows[0].constant * rows[1].x) / determinant;
+  return {
+    rows,
+    determinant,
+    x,
+    y,
+    expression: `x=${formatNumber(x)}, y=${formatNumber(y)}`,
+    ruleStep: `Use Cramer's rule. D=${formatNumber(determinant)}, x=${formatNumber(x)}, y=${formatNumber(y)}.`,
+  };
+}
+
+function parseLinearExpressionXY(expression) {
+  const terms = splitSignedTerms(expression);
+  if (!terms.length) return null;
+  return terms.reduce((acc, term) => {
+    if (!acc) return null;
+    if (isNumericLiteral(term)) return { ...acc, constant: acc.constant + Number(term) };
+    const match = term.match(/^([+-]?(?:\d+(?:\.\d+)?|\.\d+)?)\*?([xy])$/i);
+    if (!match) return null;
+    const coefficientText = match[1];
+    const coefficient = coefficientText === "" || coefficientText === "+" ? 1 : coefficientText === "-" ? -1 : Number(coefficientText);
+    if (!Number.isFinite(coefficient)) return null;
+    return { ...acc, [match[2].toLowerCase()]: acc[match[2].toLowerCase()] + coefficient };
+  }, { x: 0, y: 0, constant: 0 });
+}
+
+function parseMatrixOperation(model) {
+  const source = normalizeForCode(model.normalized || model.original || "");
+  const matrices = parseMatrices(source);
+  if (!matrices.length) return null;
+  if (/det|determinant/i.test(source) && matrices[0].length === 2 && matrices[0][0].length === 2) {
+    const matrix = matrices[0];
+    const value = matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0];
+    return {
+      operation: "determinant",
+      matrices,
+      expression: formatNumber(value),
+      ruleStep: `For [[a,b],[c,d]], determinant is ad-bc = ${formatNumber(matrix[0][0])}*${formatNumber(matrix[1][1])}-${formatNumber(matrix[0][1])}*${formatNumber(matrix[1][0])} = ${formatNumber(value)}.`,
+    };
+  }
+  if (matrices.length >= 2 && /\*|multiply|product/i.test(source)) {
+    const [a, b] = matrices;
+    if (!a.length || !b.length || a[0].length !== b.length) return null;
+    const product = a.map((row) => b[0].map((_, colIndex) => row.reduce((sum, value, index) => sum + value * b[index][colIndex], 0)));
+    return {
+      operation: "matrix_multiply",
+      matrices,
+      product,
+      expression: matrixToExpression(product),
+      ruleStep: "Multiply each row of the first matrix by each column of the second matrix, then add the products.",
+    };
+  }
+  return null;
+}
+
+function parseMatrices(source) {
+  const matches = String(source || "").match(/\[\[[\s\S]+?\]\]/g) || [];
+  return matches.map((match) => {
+    try {
+      const parsed = JSON.parse(match.replace(/'/g, '"'));
+      if (!Array.isArray(parsed) || !parsed.every((row) => Array.isArray(row))) return null;
+      return parsed.map((row) => row.map(Number));
+    } catch (error) {
+      return null;
+    }
+  }).filter((matrix) => matrix && matrix.every((row) => row.every(Number.isFinite)));
+}
+
+function matrixToExpression(matrix) {
+  return `[[${matrix.map((row) => row.map(formatNumber).join(",")).join("],[")}]]`;
+}
+
 function parseLinearExpression(expression) {
   const terms = splitSignedTerms(expression);
   if (!terms.length) return null;
@@ -1884,6 +2085,28 @@ function solveForTarget(model) {
   const { type, left, right, target } = model;
   const family = identifyFormulaFamily(model);
   const template = getSolverTemplate(family);
+  const limit = type === "limit request" ? parseLimitRequest(model) : null;
+  if (limit) {
+    return {
+      target: "limit",
+      expression: limit.expression,
+      note: `Limit solved by ${limit.method}: ${limit.ruleStep}.`,
+      supported: true,
+      family: "limit_solver",
+      limit,
+    };
+  }
+  const system = type === "linear system" ? parse2x2System(model) : null;
+  if (system) {
+    return {
+      target: "x,y",
+      expression: system.expression,
+      note: `2x2 system solve: ${system.ruleStep}.`,
+      supported: !system.expression.includes("no unique"),
+      family: "linear_system_2x2",
+      system,
+    };
+  }
   const isDerivativeRequest = type === "differentiation request" || /dy\s*\/\s*dx|derivative|differentiate|d\/dx/i.test(model.normalized || "");
   const derivative = isDerivativeRequest ? parseDerivativeRequest(model) : null;
   if (derivative) {
@@ -1927,6 +2150,28 @@ function solveForTarget(model) {
       supported: true,
       family: "linear_equation",
       linear,
+    };
+  }
+  const quadratic = parseQuadraticEquation(model);
+  if (quadratic && target === "x") {
+    return {
+      target: "x",
+      expression: quadratic.expression,
+      note: `Quadratic solve: ${quadratic.ruleStep}.`,
+      supported: !quadratic.expression.includes("no real"),
+      family: "quadratic_equation",
+      quadratic,
+    };
+  }
+  const matrix = parseMatrixOperation(model);
+  if (matrix) {
+    return {
+      target: "matrix",
+      expression: matrix.expression,
+      note: `Matrix operation: ${matrix.ruleStep}`,
+      supported: true,
+      family: matrix.operation,
+      matrix,
     };
   }
   if (type === "finite series equation") {
@@ -2124,6 +2369,30 @@ function buildAlgorithm(type, target, inputs, expression, solution = {}) {
     lines.push("3. Divide both sides by the coefficient of x.");
     lines.push(`4. Rule steps: ${solution.linear.ruleStep}.`);
     lines.push(`5. Return x = ${solution.expression}.`);
+  } else if (solution.family === "quadratic_equation") {
+    const { a, b, c } = solution.quadratic.coefficients;
+    lines.push("1. Put the equation into ax^2 + bx + c = 0 form.");
+    lines.push(`2. Identify a=${formatNumber(a)}, b=${formatNumber(b)}, c=${formatNumber(c)}.`);
+    lines.push("3. Compute the discriminant b^2 - 4ac.");
+    lines.push("4. Substitute into x=(-b±sqrt(discriminant))/(2a).");
+    lines.push(`5. Return ${solution.expression}.`);
+  } else if (solution.family === "limit_solver") {
+    lines.push("1. Identify the value x approaches.");
+    lines.push("2. Try direct substitution first.");
+    lines.push("3. If direct substitution is unstable, compare values from the left and right.");
+    lines.push(`4. Rule steps: ${solution.limit.ruleStep}.`);
+    lines.push(`5. Return limit = ${solution.expression}.`);
+  } else if (solution.family === "linear_system_2x2") {
+    lines.push("1. Put both equations into ax + by = c form.");
+    lines.push("2. Compute the determinant of the coefficient matrix.");
+    lines.push("3. If determinant is nonzero, use Cramer's rule.");
+    lines.push(`4. Rule steps: ${solution.system.ruleStep}.`);
+    lines.push(`5. Return ${solution.expression}.`);
+  } else if (solution.family === "determinant" || solution.family === "matrix_multiply") {
+    lines.push("1. Read the matrix entries row by row.");
+    lines.push(solution.family === "determinant" ? "2. For a 2x2 matrix [[a,b],[c,d]], compute ad-bc." : "2. For each output cell, multiply a row by a column and add.");
+    lines.push(`3. Rule steps: ${solution.matrix.ruleStep}`);
+    lines.push(`4. Return ${solution.expression}.`);
   } else if (solution.family === "power_rule_integral") {
     const integral = solution.integral;
     lines.push("1. Split the integrand into signed terms.");
@@ -2221,6 +2490,52 @@ function buildPseudocode(target, inputs, expression, solution = {}) {
     lines.push("END");
     return lines.join("\n");
   }
+  if (solution.family === "quadratic_equation") {
+    lines.push("READ a, b, c");
+    lines.push("discriminant = b*b - 4*a*c");
+    lines.push("IF discriminant < 0 THEN OUTPUT no real roots");
+    lines.push("x1 = (-b + sqrt(discriminant))/(2*a)");
+    lines.push("x2 = (-b - sqrt(discriminant))/(2*a)");
+    lines.push("OUTPUT x1, x2");
+    lines.push("END");
+    return lines.join("\n");
+  }
+  if (solution.family === "limit_solver") {
+    lines.push("READ expression and approach value");
+    lines.push("TRY direct substitution");
+    lines.push("IF direct value is finite THEN OUTPUT value");
+    lines.push("ELSE compare left and right nearby values");
+    lines.push("OUTPUT common approached value");
+    lines.push("END");
+    return lines.join("\n");
+  }
+  if (solution.family === "linear_system_2x2") {
+    lines.push("READ a1, b1, c1, a2, b2, c2");
+    lines.push("D = a1*b2 - b1*a2");
+    lines.push("IF D = 0 THEN OUTPUT no unique solution");
+    lines.push("x = (c1*b2 - b1*c2)/D");
+    lines.push("y = (a1*c2 - c1*a2)/D");
+    lines.push("OUTPUT x, y");
+    lines.push("END");
+    return lines.join("\n");
+  }
+  if (solution.family === "determinant") {
+    lines.push("READ a, b, c, d");
+    lines.push("determinant = a*d - b*c");
+    lines.push("OUTPUT determinant");
+    lines.push("END");
+    return lines.join("\n");
+  }
+  if (solution.family === "matrix_multiply") {
+    lines.push("FOR each result row");
+    lines.push("  FOR each result column");
+    lines.push("    result[row][column] = dot(first row, second column)");
+    lines.push("  END FOR");
+    lines.push("END FOR");
+    lines.push("OUTPUT result matrix");
+    lines.push("END");
+    return lines.join("\n");
+  }
   lines.push("VALIDATE inputs");
   lines.push(`${target} = ${expression}`);
   lines.push("VERIFY result against original formula");
@@ -2258,6 +2573,28 @@ function generateCode(model, language) {
     if (language === "python") return `def definite_integral() -> float:\n    lower = ${lower}\n    upper = ${upper}\n    return ${base}`;
     if (language === "javascript" || language === "typescript") return `function definiteIntegral() {\n  const lower = ${lower};\n  const upper = ${upper};\n  return ${base};\n}`;
     return `definite_integral = ${model.solution.expression} from F(x) = ${antiderivative}`;
+  }
+  if (model.solution.family === "quadratic_equation") {
+    const { a, b, c } = model.solution.quadratic.coefficients;
+    if (language === "python") return `import math\n\ndef solve_quadratic():\n    a, b, c = ${formatNumber(a)}, ${formatNumber(b)}, ${formatNumber(c)}\n    d = b*b - 4*a*c\n    if d < 0:\n        return []\n    return [(-b + math.sqrt(d))/(2*a), (-b - math.sqrt(d))/(2*a)]`;
+    if (language === "javascript" || language === "typescript") return `function solveQuadratic() {\n  const a = ${formatNumber(a)}, b = ${formatNumber(b)}, c = ${formatNumber(c)};\n  const d = b * b - 4 * a * c;\n  if (d < 0) return [];\n  return [(-b + Math.sqrt(d)) / (2 * a), (-b - Math.sqrt(d)) / (2 * a)];\n}`;
+  }
+  if (model.solution.family === "limit_solver") {
+    const expression = expressionForLanguage(model.solution.limit.originalExpression, language);
+    const approach = formatNumber(model.solution.limit.approach);
+    if (language === "python") return `def limit_value(x: float = ${approach}) -> float:\n    return ${expression}`;
+    if (language === "javascript" || language === "typescript") return `function limitValue(x = ${approach}) {\n  return ${expression};\n}`;
+  }
+  if (model.solution.family === "linear_system_2x2") {
+    const [r1, r2] = model.solution.system.rows;
+    if (language === "python") return `def solve_system():\n    a1, b1, c1 = ${formatNumber(r1.x)}, ${formatNumber(r1.y)}, ${formatNumber(r1.constant)}\n    a2, b2, c2 = ${formatNumber(r2.x)}, ${formatNumber(r2.y)}, ${formatNumber(r2.constant)}\n    d = a1*b2 - b1*a2\n    if d == 0:\n        return None\n    return ((c1*b2 - b1*c2)/d, (a1*c2 - c1*a2)/d)`;
+    if (language === "javascript" || language === "typescript") return `function solveSystem() {\n  const a1 = ${formatNumber(r1.x)}, b1 = ${formatNumber(r1.y)}, c1 = ${formatNumber(r1.constant)};\n  const a2 = ${formatNumber(r2.x)}, b2 = ${formatNumber(r2.y)}, c2 = ${formatNumber(r2.constant)};\n  const d = a1 * b2 - b1 * a2;\n  if (d === 0) return null;\n  return { x: (c1 * b2 - b1 * c2) / d, y: (a1 * c2 - c1 * a2) / d };\n}`;
+  }
+  if (model.solution.family === "determinant" || model.solution.family === "matrix_multiply") {
+    const matrixResult = model.solution.family === "matrix_multiply" ? model.solution.matrix.product : Number(model.solution.expression);
+    const expression = JSON.stringify(matrixResult);
+    if (language === "python") return `def matrix_result():\n    return ${expression}`;
+    if (language === "javascript" || language === "typescript") return `function matrixResult() {\n  return ${expression};\n}`;
   }
 
   const name = functionName(model.target);
@@ -3516,6 +3853,10 @@ function buildGroundLevelBreakdown(model = state.formulaModel) {
   if (model.solution.family === "power_rule_integral") return buildIntegralGroundBreakdown(model.solution.integral);
   if (model.solution.family === "definite_integral") return buildDefiniteIntegralGroundBreakdown(model.solution.integral);
   if (model.solution.family === "linear_equation") return buildLinearEquationGroundBreakdown(model);
+  if (model.solution.family === "quadratic_equation") return buildQuadraticGroundBreakdown(model.solution.quadratic);
+  if (model.solution.family === "limit_solver") return buildLimitGroundBreakdown(model.solution.limit);
+  if (model.solution.family === "linear_system_2x2") return buildSystemGroundBreakdown(model.solution.system);
+  if (model.solution.family === "determinant" || model.solution.family === "matrix_multiply") return buildMatrixGroundBreakdown(model.solution.matrix);
   return [
     `We start with: ${model.normalized}.`,
     `The system is trying to find: ${model.solution.target || model.target}.`,
@@ -3653,6 +3994,72 @@ function buildLinearEquationGroundBreakdown(model) {
     `x = ${formatNumber(linear.constant)} / ${formatNumber(linear.coefficient)}.`,
     `Final answer: x = ${linear.expression}.`,
     "Common mistake to avoid: when a number moves across the equals sign, its sign changes.",
+  ];
+}
+
+function buildQuadraticGroundBreakdown(quadratic) {
+  const { a, b, c } = quadratic.coefficients;
+  return [
+    "Goal: solve a quadratic equation. That means find the x values that make the equation equal zero.",
+    "Put the equation in this shape: ax^2 + bx + c = 0.",
+    `Here a = ${formatNumber(a)}, b = ${formatNumber(b)}, and c = ${formatNumber(c)}.`,
+    "Compute the discriminant: b^2 - 4ac.",
+    `Discriminant = ${formatNumber(quadratic.discriminant)}.`,
+    "Use the quadratic formula: x = (-b ± sqrt(discriminant)) / (2a).",
+    quadratic.roots.length ? `The root answer is: ${quadratic.expression}.` : "Because the discriminant is negative, there are no real roots.",
+    "Common mistake to avoid: b is the coefficient of x, not the coefficient of x^2.",
+  ];
+}
+
+function buildLimitGroundBreakdown(limit) {
+  const lines = [
+    "Goal: find the value the expression gets close to.",
+    `The expression is: ${limit.originalExpression}.`,
+    `x is approaching ${formatNumber(limit.approach)}.`,
+  ];
+  if (limit.method === "direct substitution") {
+    lines.push("Try direct substitution first because many limits are solved that way.");
+    lines.push(`Replace x with ${formatNumber(limit.approach)} and simplify.`);
+  } else {
+    lines.push("Direct substitution did not give a stable finite number.");
+    lines.push("So check values just to the left and just to the right of the approach point.");
+    lines.push(`Left side is about ${formatNumber(limit.leftValue)}, and right side is about ${formatNumber(limit.rightValue)}.`);
+  }
+  lines.push(`Final answer: limit = ${limit.expression}.`);
+  lines.push("Common mistake to avoid: a limit is about approaching, not always about the value exactly at the point.");
+  return lines;
+}
+
+function buildSystemGroundBreakdown(system) {
+  const [first, second] = system.rows;
+  return [
+    "Goal: solve two equations together. We need one x and one y that make both equations true.",
+    `First equation shape: ${formatNumber(first.x)}x + ${formatNumber(first.y)}y = ${formatNumber(first.constant)}.`,
+    `Second equation shape: ${formatNumber(second.x)}x + ${formatNumber(second.y)}y = ${formatNumber(second.constant)}.`,
+    "Compute the determinant D = a1*b2 - b1*a2.",
+    `D = ${formatNumber(system.determinant)}.`,
+    system.expression.includes("no unique") ? "Because D is 0, there is no single unique answer." : `Use Cramer's rule to get ${system.expression}.`,
+    "Common mistake to avoid: keep x coefficients and y coefficients in the same order for both equations.",
+  ];
+}
+
+function buildMatrixGroundBreakdown(matrix) {
+  if (matrix.operation === "determinant") {
+    return [
+      "Goal: find the determinant of a 2 by 2 matrix.",
+      "For [[a,b],[c,d]], use ad - bc.",
+      `Rule work: ${matrix.ruleStep}`,
+      `Final answer: determinant = ${matrix.expression}.`,
+      "Common mistake to avoid: subtract bc; do not add it.",
+    ];
+  }
+  return [
+    "Goal: multiply two matrices.",
+    "Take one row from the first matrix and one column from the second matrix.",
+    "Multiply matching entries, then add those products.",
+    `Rule work: ${matrix.ruleStep}`,
+    `Final answer: ${matrix.expression}.`,
+    "Common mistake to avoid: rows of the first matrix pair with columns of the second matrix.",
   ];
 }
 

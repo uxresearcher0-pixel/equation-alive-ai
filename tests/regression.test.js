@@ -415,6 +415,28 @@ assert(linearSolve.solution.family === "linear_equation", "expected linear equat
 assert(linearSolve.target === "x", "expected x as solve target");
 assert(linearSolve.solution.expression === "4", "expected linear equation solution");
 assert(app.buildGroundLevelBreakdown(linearSolve).join("\n").includes("x alone"), "expected linear ground explanation");
+const quadraticSolve = app.buildFormulaModel("x^2 - 5x + 6 = 0");
+assert(quadraticSolve.solution.family === "quadratic_equation", "expected quadratic equation solver family");
+assert(quadraticSolve.solution.expression === "x=3 or x=2", "expected quadratic roots");
+assert(quadraticSolve.pseudocode.includes("discriminant"), "expected quadratic pseudocode");
+assert(app.buildGroundLevelBreakdown(quadraticSolve).join("\n").includes("quadratic formula"), "expected quadratic ground explanation");
+const directLimit = app.buildFormulaModel("limit x->2 of x^2+1");
+assert(directLimit.solution.family === "limit_solver", "expected limit solver family");
+assert(directLimit.solution.expression === "5", "expected direct limit value");
+assert(app.buildGroundLevelBreakdown(directLimit).join("\n").includes("approaching"), "expected limit ground explanation");
+const systemSolve = app.buildFormulaModel("solve system: 2x+y=5; x-y=1");
+assert(systemSolve.solution.family === "linear_system_2x2", "expected 2x2 system solver");
+assert(systemSolve.solution.expression === "x=2, y=1", "expected 2x2 system solution");
+assert(systemSolve.pseudocode.includes("Cramer's") || systemSolve.algorithm.includes("Cramer's"), "expected system algorithm to mention Cramer's rule");
+const determinantModel = app.buildFormulaModel("determinant [[1,2],[3,4]]");
+assert(determinantModel.solution.family === "determinant", "expected determinant solver");
+assert(determinantModel.solution.expression === "-2", "expected determinant value");
+assert(app.generateCode(determinantModel, "javascript").includes("return -2"), "expected determinant numeric code template");
+assert(app.buildGroundLevelBreakdown(determinantModel).join("\n").includes("ad - bc"), "expected determinant ground explanation");
+const matrixProduct = app.buildFormulaModel("[[1,2],[3,4]] * [[5,6],[7,8]]");
+assert(matrixProduct.solution.family === "matrix_multiply", "expected matrix multiply solver");
+assert(matrixProduct.solution.expression === "[[19,22],[43,50]]", "expected matrix product");
+assert(app.generateCode(matrixProduct, "javascript").includes("matrixResult"), "expected matrix code template");
 
 assert(app.formulaLibrary.length >= 50, `expected at least 50 library items, got ${app.formulaLibrary.length}`);
 const rk4 = app.formulaLibrary.find((item) => item.id === "rk4_method");
